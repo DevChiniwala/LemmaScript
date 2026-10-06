@@ -3,8 +3,9 @@
  * `.lemmascript/runs.jsonl` (a run where Dafny is not installed records
  * nothing), with a snapshot of the source, so that a later
  * report can tell which failures were fixed and whether the fix changed the
- * program or only the proof. Logging must never change lsc's output or exit
- * code, so every filesystem step is best-effort and swallows its own errors.
+ * program or only the proof, and read the records back for that report.
+ * Logging must never change lsc's output or exit code, so every filesystem
+ * step is best-effort and swallows its own errors.
  */
 
 import { createHash, randomUUID } from "crypto";
@@ -121,6 +122,21 @@ export function snapshotSource(dir: string, text: string): string {
   const blob = path.join(dir, "blobs", `${hash}.ts`);
   if (!existsSync(blob)) writeFileSync(blob, text);
   return hash;
+}
+
+/**
+ * The `verify` records in `<logDir>/.lemmascript/runs.jsonl`, in file order.
+ * Skips lines that don't parse (such as a half-written last line), other
+ * record types and other schema versions; a missing log has no records.
+ */
+export function readRecords(logDir: string): VerifyRecord[] {
+  const text = safely(() => readFileSync(path.join(logDir, ".lemmascript", "runs.jsonl"), "utf8")) ?? "";
+  const records: VerifyRecord[] = [];
+  for (const line of text.split("\n")) {
+    const r = safely(() => JSON.parse(line));
+    if (r?.type === "verify" && r.v === RUN_LOG_SCHEMA_VERSION) records.push(r);
+  }
+  return records;
 }
 
 /**

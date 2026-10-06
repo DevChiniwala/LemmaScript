@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_OPTIONS, resolveOptions } from "../src/config.ts";
-import { emitDafnyFile } from "../src/dafny-emit.ts";
+import { DAFNY_HELPER_NAMES, emitDafnyFile } from "../src/dafny-emit.ts";
 import type { Decl, Expr, Module } from "../src/ir.ts";
 
 const utf16 = resolveOptions({ "string-semantics": "javascript-utf16", "dafny-library": "local" }, "test");
@@ -90,3 +90,21 @@ for (const inNamespace of [false, true]) {
     assert.equal(emitDafnyFile(numbers, "numbers.ts", utf16), baseline);
   });
 }
+
+test("the generated helper names include preamble functions, predicates, lemmas and methods", () => {
+  for (const name of [
+    "JSFloorDiv", "JSRem", "SeqFilter", "NormalizeSliceIndex", "SafeSlice", "StringTrim", // functions
+    "SeqSort",                                                                            // function with {:axiom}
+    "IsJSWhitespace",                                                                     // predicate
+    "MaxOfSeqConcat",                                                                     // lemma
+    "SetToSeq",                                                                           // method
+  ]) {
+    assert.ok(DAFNY_HELPER_NAMES.has(name), name);
+  }
+  assert.ok(!DAFNY_HELPER_NAMES.has("splitBill"));
+  assert.ok(!DAFNY_HELPER_NAMES.has("Option"));
+});
+
+test("the generated helper names ignore declaration keywords inside preamble comments", () => {
+  assert.ok(!DAFNY_HELPER_NAMES.has("bodies"));
+});

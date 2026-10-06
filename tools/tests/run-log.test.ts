@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { dafnyCheckDiff, dafnyRegen, dafnyVerify } from "../src/dafny-commands.ts";
 import {
-  RunLog, ensureLogDir, hashText, isPartialRun, parseTextLog, resolveLogDir, runLogEnabled, snapshotSource,
+  RunLog, ensureLogDir, hashText, isPartialRun, parseTextLog, readRecords, resolveLogDir, runLogEnabled, snapshotSource,
 } from "../src/run-log.ts";
 
 const posixOnly = { skip: process.platform === "win32" };
@@ -326,6 +326,47 @@ test("discard ends a run without a record and removes Dafny's temporary results 
     log.finish({ stage: "ok", exit: 0, dfyPath: source });
     assert.equal(existsSync(folder), false);
     assert.equal(existsSync(join(root, ".lemmascript", "runs.jsonl")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Reading records.
+
+test("readRecords returns verify records in file order", () => {
+  const root = tempDir();
+  try {
+    const dir = ensureLogDir(root);
+    const lines = [{ v: 1, type: "verify", id: "a" }, { v: 1, type: "verify", id: "b" }];
+    writeFileSync(join(dir, "runs.jsonl"), lines.map(r => JSON.stringify(r)).join("\n") + "\n");
+    assert.deepEqual(readRecords(root).map(r => r.id), ["a", "b"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readRecords skips unparseable lines, other record types and other schema versions", () => {
+  const root = tempDir();
+  try {
+    const dir = ensureLogDir(root);
+    writeFileSync(join(dir, "runs.jsonl"), [
+      JSON.stringify({ v: 1, type: "verify", id: "a" }),
+      "not json",
+      JSON.stringify({ v: 1, type: "claimcheck", id: "b" }),
+      JSON.stringify({ v: 2, type: "verify", id: "c" }),
+      JSON.stringify({ v: 1, type: "verify", id: "d" }),
+      '{"v":1,"type":"veri',
+    ].join("\n"));
+    assert.deepEqual(readRecords(root).map(r => r.id), ["a", "d"]);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+test("readRecords returns no records when there is no log", () => {
+  const root = tempDir();
+  try {
+    assert.deepEqual(readRecords(root), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

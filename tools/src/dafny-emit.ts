@@ -1512,6 +1512,17 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SetFromSeq", SET_FROM_SEQ],
 ];
 
+/**
+ * Every function, predicate, lemma and method the preambles declare, so tools reading
+ * Dafny results can tell lsc's own helpers from the user's members. The
+ * profile-dependent entries only change literals, so either variant gives the same names.
+ */
+export const DAFNY_HELPER_NAMES: ReadonlySet<string> = new Set(
+  PREAMBLE_CODE.flatMap(([, code]) =>
+    [...(typeof code === "function" ? code() : code).matchAll(/^\s*(?:function|predicate|lemma|method)(?:\s+\{:[^}]*\})*\s+([A-Za-z_][A-Za-z0-9_]*)/gm)]
+      .map(m => m[1])),
+);
+
 // ── Constructor and record helpers ───────────────────────────
 
 let _recordCtors = new Map<string, string>();
