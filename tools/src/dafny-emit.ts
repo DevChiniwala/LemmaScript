@@ -9,6 +9,9 @@ import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
+/** Appended to a function's name for the lemma that carries its `//@ ensures`. */
+export const ENSURES_LEMMA_SUFFIX = "_ensures";
+
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
  *  check — a same-named name elsewhere in the module keeps the plain binder. */
@@ -896,7 +899,7 @@ function emitDecl(d: Decl): string {
         // Strip constraints like (==) from type params — ghost lemmas don't need them
         const lemmaTP = d.typeParams.length > 0 ? `<${d.typeParams.map(t => t.replace(/\(.*\)/, '')).join(", ")}>` : "";
         lines.push("");
-        lines.push(`lemma ${escapeGeneratedName(`${d.name}_ensures`)}${lemmaTP}(${paramList(d.params)})`);
+        lines.push(`lemma ${escapeGeneratedName(`${d.name}${ENSURES_LEMMA_SUFFIX}`)}${lemmaTP}(${paramList(d.params)})`);
         for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
         for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
         lines.push(`{`);
