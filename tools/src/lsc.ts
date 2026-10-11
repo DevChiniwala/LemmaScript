@@ -22,6 +22,7 @@ import { dafnyGen, dafnyCheckDiff, dafnyVerify, dafnyRegen } from "./dafny-comma
 import { leanGen, leanCheck } from "./lean-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
 import { RunLog, resolveLogDir, runLogEnabled } from "./run-log.js";
+import { runRuns } from "./runs-command.js";
 import {
   findUp,
   loadConfigOptions,
@@ -84,6 +85,13 @@ function main() {
         process.exit(1);
       }
     }
+    return;
+  }
+
+  // `lsc runs` reads the run log and takes its own flags (`--json`, `--config=`),
+  // so it is dispatched before the file commands' flag parsing.
+  if (args[0] === "runs") {
+    runRuns(args.slice(1));
     return;
   }
 
@@ -174,6 +182,7 @@ function main() {
     console.error("       lsc info --typed <file.ts>   (machine-readable Typed IR contract to stdout)");
     console.error("       lsc <gen|gen-check|check> [--backend=…] [--slow]   (no file: batch over LemmaScript-files.txt)");
     console.error("       lsc claimcheck [<file.ts>] [flags…]   (forwards to lemmascript-claimcheck)");
+    console.error("       lsc runs [--json] [--config=path]   (what verification caught, from .lemmascript/runs.jsonl)");
     console.error("       lsc version");
     process.exit(1);
   }

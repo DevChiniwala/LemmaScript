@@ -9,7 +9,8 @@
  * by what changed between its first failing run and its passing run. A
  * source fix also gets the diff of its two `.ts` snapshots and a hint at
  * whether the code, the spec or only the proof changed. `runsReport` gathers
- * all of this as data (what `--json` prints) and `formatText` summarises it.
+ * all of this as data (what `--json` prints) and `formatText` summarises it;
+ * `runRuns` is the command `lsc.ts` calls.
  */
 
 import { execFileSync } from "child_process";
@@ -17,7 +18,8 @@ import { existsSync } from "fs";
 import path from "path";
 import { DAFNY_HELPER_NAMES, ENSURES_LEMMA_SUFFIX } from "./dafny-emit.js";
 import type { AnnotKind } from "./extract.js";
-import { readRecords, type VerifyRecord } from "./run-log.js";
+import { loadConfigOptions } from "./config.js";
+import { readRecords, resolveLogDir, type VerifyRecord } from "./run-log.js";
 
 /**
  * Whether each `//@` keyword the extractor parses states what a function
@@ -367,4 +369,28 @@ export function runsReport(logDir: string): RunsReport {
     },
     catches, open, dropped,
   };
+}
+
+/**
+ * `lsc runs [--json] [--config=<path>]`: report the log that `lsc check` and
+ * `lsc regen` record to from the current directory. Recording settings don't
+ * apply; a log that exists is always read.
+ */
+export function runRuns(args: string[]): void {
+  let json = false;
+  let configPath: string | undefined;
+  for (const arg of args) {
+    if (arg === "--json") json = true;
+    else if (arg.startsWith("--config=")) {
+      configPath = arg.slice("--config=".length);
+      if (!configPath) throw new Error("Invalid --config: expected a path after '='");
+    } else if (arg.startsWith("-")) throw new Error(`Unknown flag: ${arg} (lsc runs takes only --json and --config=<path>)`);
+    else throw new Error(`lsc runs takes no file (got: ${arg})`);
+  }
+  // Config and log discovery start at a source file's directory, so use a
+  // synthetic path under cwd, as `lsc config` does.
+  const probe = path.join(process.cwd(), ".lemmascript-runs-probe.ts");
+  const { configFile } = loadConfigOptions(probe, configPath);
+  const report = runsReport(resolveLogDir(probe, configFile));
+  console.log(json ? JSON.stringify(report, null, 2) : formatText(report));
 }

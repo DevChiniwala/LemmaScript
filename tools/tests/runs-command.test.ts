@@ -1,8 +1,11 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
+import { spawnSync } from "node:child_process";
 import { mkdirSync, mkdtempSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { join } from "node:path";
+import { fileURLToPath } from "node:url";
 import { emitDafnyFile } from "../src/dafny-emit.ts";
 import type { Module } from "../src/ir.ts";
 import type { VerifyRecord } from "../src/run-log.ts";
@@ -10,6 +13,9 @@ import {
   changeHint, classify, formatText, functionOf, groupByFunction, memberResults, runsReport, snapshotDiff,
   type FunctionResult, type MemberResult, type RunsReport,
 } from "../src/runs-command.ts";
+
+const cli = fileURLToPath(new URL("../src/lsc.ts", import.meta.url));
+const loader = createRequire(import.meta.url).resolve("tsx");
 
 /**
  * A run log built in order: each record gets id `r1`, `r2`, … and a timestamp
@@ -108,6 +114,24 @@ const SPLIT_BILL_CATCH: RunsReport["catches"][number] = {
   failedAt: "2026-10-06T14:13:22.844Z", failedRun: "r1", fixedAt: "2026-10-06T14:17:18.737Z", fixedRun: "r2",
   evidence: { hint: "code", diff: AGENT_TRIAL_DIFF },
 };
+
+/** Run the real `lsc` with `args` in `cwd`. */
+function lsc(cwd: string, args: string[], env: Record<string, string> = {}) {
+  const result = spawnSync(process.execPath, ["--import", loader, cli, ...args], {
+    cwd, env: { ...process.env, ...env }, encoding: "utf8", timeout: 30_000,
+  });
+  assert.ifError(result.error);
+  return result;
+}
+
+/** A log of one source-fix catch of `f` in `a.ts` (failed, then fixed with a changed `.ts`), with both snapshots. */
+function writeCatchLog(logDir: string): void {
+  const blobs = join(logDir, ".lemmascript", "blobs");
+  mkdirSync(blobs, { recursive: true });
+  writeFileSync(join(blobs, "aaaaaaaaaaaa.ts"), "return 1;\n");
+  writeFileSync(join(blobs, "cccccccccccc.ts"), "return 2;\n");
+  writeLog(logDir, log({ failed: ["f"] }, { passed: ["f"], tsHash: "cccccccccccc" }));
+}
 
 // Member results: each Dafny member's failure streaks, marked caught, open or dropped.
 
@@ -406,3 +430,90 @@ test("formatText says so when no runs are recorded", () => {
   const report = textReport({ runs: 0, files: 0, from: null, to: null });
   assert.equal(formatText(report, "UTC"), "No runs recorded yet in /project/.lemmascript/runs.jsonl.");
 });
+
+// The `lsc runs` command, through the real CLI.
+
+test("lsc runs prints the summary of the log beside lemmascript.json", () =>
+  withLogDir(dir => {
+    writeFileSync(join(dir, "lemmascript.json"), "{}\n");
+    writeCatchLog(dir);
+    const result = lsc(dir, ["runs"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.match(result.stdout, /^2 runs, 1 file, /);
+    assert.match(result.stdout, /^source-fix {2}a\.ts {2}f {2}failed .*hint: code$/m);
+  }));
+
+test("lsc runs --json prints the report as JSON", () =>
+  withLogDir(dir => {
+    writeFileSync(join(dir, "lemmascript.json"), "{}\n");
+    writeCatchLog(dir);
+    const result = lsc(dir, ["runs", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    const report = JSON.parse(result.stdout);
+    assert.equal(report.log, join(dir, ".lemmascript", "runs.jsonl"));
+    assert.deepEqual(report.counts, { catches: 1, sourceFix: 1, proof: 0, flaky: 0, open: 0, dropped: 0 });
+  }));
+
+test("lsc runs --config reads the log beside the chosen lemmascript.json", () =>
+  withLogDir(dir => {
+    mkdirSync(join(dir, "project", ".lemmascript"), { recursive: true });
+    mkdirSync(join(dir, "elsewhere"));
+    writeFileSync(join(dir, "project", "lemmascript.json"), "{}\n");
+    writeFileSync(join(dir, "elsewhere", "lemmascript.json"), "{}\n");
+    writeCatchLog(join(dir, "project"));
+    const result = lsc(join(dir, "elsewhere"), ["runs", "--json", "--config=../project/lemmascript.json"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).log, join(dir, "project", ".lemmascript", "runs.jsonl"));
+  }));
+
+test("without lemmascript.json, lsc runs reads the log beside LemmaScript-files.txt", () =>
+  withLogDir(dir => {
+    writeFileSync(join(dir, "LemmaScript-files.txt"), "a.ts\n");
+    mkdirSync(join(dir, "src"));
+    writeCatchLog(dir);
+    const result = lsc(join(dir, "src"), ["runs", "--json"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).log, join(dir, ".lemmascript", "runs.jsonl"));
+  }));
+
+test("lsc runs still reads the log when recording is turned off", () =>
+  withLogDir(dir => {
+    writeFileSync(join(dir, "lemmascript.json"), JSON.stringify({ "run-log": false }) + "\n");
+    writeCatchLog(dir);
+    const result = lsc(dir, ["runs", "--json"], { LSC_RUN_LOG: "false" });
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(JSON.parse(result.stdout).counts.catches, 1);
+  }));
+
+test("lsc runs with no log says no runs are recorded yet", () =>
+  withLogDir(dir => {
+    writeFileSync(join(dir, "lemmascript.json"), "{}\n");
+    const result = lsc(dir, ["runs"]);
+    assert.equal(result.status, 0, result.stderr);
+    assert.equal(result.stdout, `No runs recorded yet in ${join(dir, ".lemmascript", "runs.jsonl")}.\n`);
+  }));
+
+for (const arg of ["--all", "--backend=lean", "--bogus"]) {
+  test(`lsc runs rejects ${arg}`, () =>
+    withLogDir(dir => {
+      const result = lsc(dir, ["runs", arg]);
+      assert.equal(result.status, 1);
+      assert.match(result.stderr, new RegExp(`Unknown flag: ${arg}`));
+      assert.equal(result.stdout, "");
+    }));
+}
+
+test("lsc runs rejects a file argument", () =>
+  withLogDir(dir => {
+    const result = lsc(dir, ["runs", "a.ts"]);
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /lsc runs takes no file/);
+  }));
+
+test("--json is still an unknown flag for other commands", () =>
+  withLogDir(dir => {
+    writeFileSync(join(dir, "a.ts"), "export const a = 1;\n");
+    const result = lsc(dir, ["check", "--json", "a.ts"], { LSC_RUN_LOG: "false" });
+    assert.equal(result.status, 1);
+    assert.match(result.stderr, /Unknown flag: --json/);
+  }));
