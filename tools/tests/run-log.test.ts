@@ -22,6 +22,26 @@ function records(logDir: string): any[] {
     .trim().split("\n").map(line => JSON.parse(line));
 }
 
+/** A complete verify record as JSON, with `id` and any fields overridden (`undefined` removes one). */
+function recordLine(id: string, overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    v: 1, type: "verify", id, ts: "2026-10-06T01:00:00.000Z", cmd: "check", file: "a.ts", stage: "ok", exit: 0,
+    partial: false, failed: [], passed: ["f"], tsHash: "aaaaaaaaaaaa", dfyHash: null, lsc: "0",
+    ...overrides,
+  });
+}
+
+/** The ids `readRecords` keeps from a log made of `lines`. */
+function readIds(lines: string[]): string[] {
+  const root = tempDir();
+  try {
+    writeFileSync(join(ensureLogDir(root), "runs.jsonl"), lines.join("\n") + "\n");
+    return readRecords(root).map(r => r.id);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+}
+
 // Trimmed from real Dafny 4.11 `--log-format text` output for a broken arraySum.
 const TEXT_LOG = `
 Results for sumTo (well-formedness)
@@ -349,33 +369,40 @@ test("discard ends a run without a record and removes Dafny's temporary results 
 // Reading records.
 
 test("readRecords returns verify records in file order", () => {
-  const root = tempDir();
-  try {
-    const dir = ensureLogDir(root);
-    const lines = [{ v: 1, type: "verify", id: "a" }, { v: 1, type: "verify", id: "b" }];
-    writeFileSync(join(dir, "runs.jsonl"), lines.map(r => JSON.stringify(r)).join("\n") + "\n");
-    assert.deepEqual(readRecords(root).map(r => r.id), ["a", "b"]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.deepEqual(readIds([recordLine("a"), recordLine("b")]), ["a", "b"]);
 });
 
 test("readRecords skips unparseable lines, other record types and other schema versions", () => {
-  const root = tempDir();
-  try {
-    const dir = ensureLogDir(root);
-    writeFileSync(join(dir, "runs.jsonl"), [
-      JSON.stringify({ v: 1, type: "verify", id: "a" }),
-      "not json",
-      JSON.stringify({ v: 1, type: "claimcheck", id: "b" }),
-      JSON.stringify({ v: 2, type: "verify", id: "c" }),
-      JSON.stringify({ v: 1, type: "verify", id: "d" }),
-      '{"v":1,"type":"veri',
-    ].join("\n"));
-    assert.deepEqual(readRecords(root).map(r => r.id), ["a", "d"]);
-  } finally {
-    rmSync(root, { recursive: true, force: true });
-  }
+  assert.deepEqual(readIds([
+    recordLine("a"),
+    "not json",
+    recordLine("b", { type: "claimcheck" }),
+    recordLine("c", { v: 2 }),
+    recordLine("d"),
+    '{"v":1,"type":"veri',
+  ]), ["a", "d"]);
+});
+
+// A hand-edited line must be skipped like an unparseable one, never crash or invent members.
+for (const [name, overrides] of [
+  ["no failed list", { failed: undefined }],
+  ["failed as a string", { failed: "foo" }],
+  ["a non-string member", { passed: ["f", 3] }],
+  ["no passed list", { passed: undefined }],
+  ["no timestamp", { ts: undefined }],
+  ["a timestamp that isn't a date", { ts: "yesterday" }],
+  ["no file", { file: undefined }],
+  ["a numeric id", { id: 7 }],
+  ["no partial flag", { partial: undefined }],
+  ["a numeric hash", { tsHash: 5 }],
+] as const) {
+  test(`readRecords skips a record with ${name}`, () => {
+    assert.deepEqual(readIds([recordLine("a"), recordLine("bad", overrides), recordLine("c")]), ["a", "c"]);
+  });
+}
+
+test("readRecords keeps a record whose hashes are null", () => {
+  assert.deepEqual(readIds([recordLine("a", { tsHash: null, dfyHash: null })]), ["a"]);
 });
 
 test("readRecords returns no records when there is no log", () => {
