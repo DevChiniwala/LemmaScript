@@ -33,6 +33,7 @@ exits `0` on success and `1` on any failure.
 | `lsc info <file.ts>` | Write `<file>.ts.json`, a per-function spec summary (backend-neutral) |
 | `lsc config [<file.ts>]` | Show the discovered config, effective options, and resolved Dafny artifact directory |
 | `lsc claimcheck [<file.ts>]` | Check each function's plain-English `//@ contract` against its formal clauses |
+| `lsc runs [--json]` | Report what verification caught, from the run log |
 
 ### `lsc gen`
 
@@ -113,6 +114,7 @@ the git repository root, or else in the current directory): one line per run in
 of the source. The directory ignores
 itself in git, and logging never changes `lsc` output or exit codes. Set it to `false` to
 turn logging off for the project, or `LSC_RUN_LOG=false` for a single run.
+`lsc runs` reports what the log caught.
 
 A file can override both project settings before its first statement:
 
@@ -131,6 +133,29 @@ Forwards to the bundled `lemmascript-claimcheck` CLI, which cross-examines the
 plain-English `//@ contract` line against the formal clauses. With a file, it checks
 that file (extra flags pass through verbatim); with no file, it runs once per entry
 in `LemmaScript-files.txt`.
+
+### `lsc runs`
+
+Reads the run log and reports **catches**: failures that a later `check` or `regen`
+fixed, one per TypeScript function. Each is a `source-fix` (the `.ts` changed), a
+`proof` fix (only the `.dfy` changed) or `flaky` (nothing changed). A source fix also
+gets a hint at what the fix changed: `code`, `spec` (`requires`, `ensures` or
+`contract` lines), `mixed`, or `proof` (only invariants and other proof annotations).
+Failures not yet fixed are listed as open, or dropped if their function went away.
+
+```
+7 runs, 1 file, 2026-10-05 16:08 → 16:47
+
+catches: 2   (source-fix 1, proof 1, flaky 0)
+open: 0   dropped: 0
+
+proof       arraySum.ts  arraySum  failed 16:28, fixed 16:36
+source-fix  arraySum.ts  arraySum  failed 16:38, fixed 16:45  hint: code
+```
+
+The log is found as `run-log` above describes, or beside `--config=<path>`. Times are
+local. `--json` prints the full report, with UTC times and each source fix's diff.
+`lsc runs` reads an existing log even when recording is turned off.
 
 ## Batch mode
 

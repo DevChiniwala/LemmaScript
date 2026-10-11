@@ -1322,6 +1322,7 @@ lsc info <file.ts>                             — write a JSON summary of verif
 lsc info --typed <file.ts>                     — print the machine-readable Typed IR contract (stdout)
 lsc config [<file.ts>]                         — print discovered config and effective options
 lsc claimcheck [<file.ts>]                     — check //@ contract prose vs //@ ensures (forwards to lemmascript-claimcheck)
+lsc runs [--json]                              — report what verification caught, from the run log (§7.8)
 lsc version                                    — print the lemmascript package version
 ```
 
@@ -1442,6 +1443,20 @@ report on every member. Logging never changes `lsc` output or exit codes.
 ```
 
 turns it off for a project; `LSC_RUN_LOG=false` turns it off for one run.
+
+### 7.8 `runs`
+
+`lsc runs [--json] [--config=<path>]` reads the run log (§7.7) found from the current directory
+and reports **catches**: failures that a later run fixed, one per TypeScript function (a function's
+`_ensures` lemma counts with it; lsc's generated helpers are left out). Each catch compares its
+first failing run with its passing run: a changed `.ts` is a `source-fix`, a changed `.dfy` alone
+is `proof`, and no change is `flaky`. A `source-fix` also carries the diff of the two `.ts`
+snapshots and a hint: `code` or `spec` (`requires`/`ensures`/`contract` lines) changed, both
+(`mixed`), or only proof scaffolding (`proof`). Failures still failing are listed as open; failures
+whose function disappeared are dropped. A member absent from a partial run is never dropped.
+
+Text output summarises the log in local time; `--json` gives the full report, with UTC times and
+the diff evidence. `lsc runs` reads an existing log even when recording is turned off.
 
 ---
 

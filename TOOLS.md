@@ -174,6 +174,8 @@ not implement routing themselves.
 
 `check` and `regen` pass an optional `RunLog` (`run-log.ts`) to these helpers, and each records the stage it detects: `dafnyCheckDiff` records `diff`, `dafnyVerify` records `ok`/`verify`/`resolve`, and `dafnyRegen` records `conflict` and `--no-verify` runs. Recording lives in the helpers only because they end runs with `process.exit`; if they ever return outcomes instead, it belongs in `lsc.ts`. Dafny keeps inherited stdio; member outcomes come from `--log-format text` written to a temp file.
 
+`lsc runs` (`runs-command.ts`) reads those records back and derives catches. It relies on names the emitter and extractor own: `DAFNY_HELPER_NAMES` (every function, predicate, lemma and method in the Dafny preambles, which are not counted as user code) and `ENSURES_LEMMA_SUFFIX` from `dafny-emit.ts`, and `AnnotKind` from `extract.ts`, whose every keyword it must classify as spec or proof scaffolding (the typecheck fails otherwise).
+
 ## Narrow Rules
 
 `narrow.ts` (structural-narrowing rewrite pass) takes typed IR and rewrites narrowing patterns into IR nodes that transform lowers uniformly: `someMatch` (binary, for optional checks) or `tagMatch` (multi-case, for discriminated unions). Each carries the scrutinee, the matched cases, and the fallthrough.
@@ -306,5 +308,6 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `dafny-commands.ts` | CLI | Dafny gen/gen-check/regen/check commands |
 | `info-command.ts` | CLI | `lsc info` — per-function spec summary JSON; `--typed` — Typed IR contract for satellites |
 | `config.ts` | CLI/shared | Option registry, config discovery/validation, file overrides, artifact path mapping |
-| `run-log.ts` | CLI | Run log: `.lemmascript/` directory, source snapshots, one record per Dafny `check`/`regen` |
+| `run-log.ts` | CLI | Run log: `.lemmascript/` directory, source snapshots, one record per Dafny `check`/`regen`; reads records back |
+| `runs-command.ts` | CLI | `lsc runs` — catches, open and dropped failures from the run log, with diff evidence and change hints |
 | `lsc.ts` | CLI | Wires the pipeline, dispatches to backend |
