@@ -172,28 +172,70 @@ export function functionOf(member: string): string | null {
   return member.endsWith(ENSURES_LEMMA_SUFFIX) ? member.slice(0, -ENSURES_LEMMA_SUFFIX.length) : member;
 }
 
+/** Order ISO timestamps oldest first. */
+function byTime(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** When a member's failure ended (the fixing or dropping run's time), or null while it is still open. */
+function endOf(r: MemberResult): string | null {
+  return (r.fixedRun ?? r.droppedRun)?.ts ?? null;
+}
+
+/** Whether `a`'s failure ended after `b`'s: open is latest, and a fix beats a drop in the same run. */
+function endsLater(a: MemberResult, b: MemberResult): boolean {
+  const ea = endOf(a);
+  const eb = endOf(b);
+  if (eb === null) return false;
+  if (ea === null) return true;
+  if (ea !== eb) return ea > eb;
+  return a.status === "caught" && b.status !== "caught";
+}
+
+/** One function's overlapping member failures as one result, ending the way `last` (the latest to end) did. */
+function mergeSpan(fn: string, span: MemberResult[], last: MemberResult): FunctionResult {
+  return {
+    file: last.file, function: fn, members: [...new Set(span.map(r => r.member))].sort(),
+    status: last.status, failedRun: span[0].failedRun, fixedRun: last.fixedRun, droppedRun: last.droppedRun,
+  };
+}
+
 /**
- * Merge member results into one per TypeScript function: members fixed (or
- * dropped) by the same run are one result, starting at the earliest failure.
+ * Merge member results into one per TypeScript function. A function is failing
+ * while any of its members is, so member failures that overlap (or where one
+ * starts in the run that ends another) are one result: it starts at the earliest
+ * failure and ends the way the last of them ended (still open, fixed or dropped).
  * Generated helpers are left out.
  */
 export function groupByFunction(results: MemberResult[]): FunctionResult[] {
-  const groups = new Map<string, FunctionResult>();
+  const byFunction = new Map<string, { fn: string; results: MemberResult[] }>();
   for (const r of results) {
     const fn = functionOf(r.member);
     if (fn === null) continue;
-    const key = [r.file, fn, r.status, (r.fixedRun ?? r.droppedRun)?.id ?? ""].join("\0");
-    const group = groups.get(key);
-    if (group === undefined) {
-      const { member, ...rest } = r;
-      groups.set(key, { ...rest, function: fn, members: [member] });
-      continue;
-    }
-    group.members.push(r.member);
-    if (r.failedRun.ts < group.failedRun.ts) group.failedRun = r.failedRun;
+    const key = `${r.file}\0${fn}`;
+    const group = byFunction.get(key);
+    if (group === undefined) byFunction.set(key, { fn, results: [r] });
+    else group.results.push(r);
   }
-  for (const group of groups.values()) group.members.sort();
-  return [...groups.values()];
+  const merged: FunctionResult[] = [];
+  for (const { fn, results: group } of byFunction.values()) {
+    group.sort((a, b) => byTime(a.failedRun.ts, b.failedRun.ts));
+    let span: MemberResult[] = [];
+    let last: MemberResult | null = null;
+    for (const r of group) {
+      // A failure starting after the span's last one ended means the function passed in between.
+      const end = last === null ? null : endOf(last);
+      if (last !== null && end !== null && r.failedRun.ts > end) {
+        merged.push(mergeSpan(fn, span, last));
+        span = [];
+        last = null;
+      }
+      span.push(r);
+      if (last === null || endsLater(r, last)) last = r;
+    }
+    if (last !== null) merged.push(mergeSpan(fn, span, last));
+  }
+  return merged;
 }
 
 /** Compare the first failing run with the passing run: source first, then proof. */
@@ -308,11 +350,6 @@ export function snapshotDiff(logDir: string, fromHash: string | null, toHash: st
     const stdout = typeof e?.stdout === "string" ? e.stdout : "";
     return e?.status === 1 && e?.signal == null && stdout.startsWith("diff --git ") ? stdout : null;
   }
-}
-
-/** Order ISO timestamps oldest first. */
-function byTime(a: string, b: string): number {
-  return a < b ? -1 : a > b ? 1 : 0;
 }
 
 /** A caught function result as a catch, with diff evidence when the source changed. */

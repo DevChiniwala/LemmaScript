@@ -125,7 +125,7 @@ There are no sessions. `lsc runs` always derives catches from the whole log, bec
 
 A failure that has no later pass yet is **open**. If a member is missing from a later run that is not `partial`, because it was renamed or deleted, the failure is reported as **dropped**, never as a catch.
 
-**One catch per TypeScript function.** Member catches are then merged per TypeScript function, because the counts exist to show impact, and a broken function is what a user would report. A function's `_ensures` lemma counts with the function when the same run fixes both, and lsc's generated preamble helpers (such as `JSFloorDiv`) are never counted. `--json` keeps the full member list for every catch.
+**One catch per TypeScript function.** Member catches are then merged per TypeScript function, because the counts exist to show impact, and a broken function is what a user would report. A function is failing while any of its members (the function and its `_ensures` lemma) is, so member failures that overlap form one catch, from the earliest failure to the run where the last member passed. lsc's generated preamble helpers (such as `JSFloorDiv`) are never counted. `--json` keeps the full member list for every catch.
 
 Each catch has an ID, formed from the first failing run and the function name, such as `r_7f3a:applyDiscount`.
 

@@ -213,12 +213,35 @@ test("a function and its ensures lemma fixed by the same run are one catch from 
   assert.deepEqual(functionSummary(groupByFunction(memberResults(records))), ["a.ts foo caught [foo,foo_ensures] r1→r3"]);
 });
 
-test("members of one function fixed by different runs are separate catches", () => {
+test("a function stays caught until its last failing member passes", () => {
+  const records = log({ failed: ["foo", "foo_ensures"] }, { failed: ["foo_ensures"], passed: ["foo"] }, { passed: ["foo", "foo_ensures"] });
+  assert.deepEqual(functionSummary(groupByFunction(memberResults(records))), ["a.ts foo caught [foo,foo_ensures] r1→r3"]);
+});
+
+test("a member that starts failing as another is fixed continues the same catch", () => {
   const records = log({ failed: ["foo"], passed: ["foo_ensures"] }, { failed: ["foo_ensures"], passed: ["foo"] }, { passed: ["foo", "foo_ensures"] });
+  assert.deepEqual(functionSummary(groupByFunction(memberResults(records))), ["a.ts foo caught [foo,foo_ensures] r1→r3"]);
+});
+
+test("a function that passed between two failures is caught twice, with different ids", () => {
+  const records = log(
+    { failed: ["foo"], passed: ["foo_ensures"] }, { passed: ["foo", "foo_ensures"] },
+    { failed: ["foo_ensures"], passed: ["foo"] }, { passed: ["foo", "foo_ensures"] },
+  );
   assert.deepEqual(functionSummary(groupByFunction(memberResults(records))), [
     "a.ts foo caught [foo] r1→r2",
-    "a.ts foo caught [foo_ensures] r2→r3",
+    "a.ts foo caught [foo_ensures] r3→r4",
   ]);
+});
+
+test("a function with a member still failing is open, not caught", () => {
+  const records = log({ failed: ["foo", "foo_ensures"] }, { failed: ["foo_ensures"], passed: ["foo"] });
+  assert.deepEqual(functionSummary(groupByFunction(memberResults(records))), ["a.ts foo open [foo,foo_ensures] r1"]);
+});
+
+test("a function fixed in the run that drops its ensures lemma is caught", () => {
+  const records = log({ failed: ["foo", "foo_ensures"] }, { passed: ["foo"] });
+  assert.deepEqual(functionSummary(groupByFunction(memberResults(records))), ["a.ts foo caught [foo,foo_ensures] r1→r2"]);
 });
 
 test("generated helpers are left out of catches", () => {

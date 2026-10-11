@@ -1447,8 +1447,9 @@ turns it off for a project; `LSC_RUN_LOG=false` turns it off for one run.
 ### 7.8 `runs`
 
 `lsc runs [--json] [--config=<path>]` reads the run log (§7.7) found from the current directory
-and reports **catches**: failures that a later run fixed, one per TypeScript function (a function's
-`_ensures` lemma counts with it; lsc's generated helpers are left out). Each catch compares its
+and reports **catches**: failures that a later run fixed, one per TypeScript function (a function
+fails while it or its `_ensures` lemma fails, and is fixed when both pass; lsc's generated helpers
+are left out). Each catch compares its
 first failing run with its passing run: a changed `.ts` is a `source-fix`, a changed `.dfy` alone
 is `proof`, and no change is `flaky`. A `source-fix` also carries the diff of the two `.ts`
 snapshots and a hint: `code` or `spec` (`requires`/`ensures`/`contract` lines) changed, both
