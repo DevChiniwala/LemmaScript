@@ -1457,7 +1457,9 @@ snapshots and a hint: `code` or `spec` (`requires`/`ensures`/`contract` lines) c
 whose function disappeared are dropped. A member absent from a partial run is never dropped.
 
 Text output summarises the log in local time; `--json` gives the full report, with UTC times and
-the diff evidence. `lsc runs` reads an existing log even when recording is turned off.
+the diff evidence. The diff needs `git`: without it, or without a snapshot, the diff and hint are
+`null` (with a warning on stderr when `git` is the cause). Log lines that cannot be read are skipped.
+`lsc runs` reads an existing log even when recording is turned off.
 
 ---
 

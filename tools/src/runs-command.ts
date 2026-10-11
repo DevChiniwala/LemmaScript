@@ -137,7 +137,11 @@ function verdict(run: VerifyRecord, member: string): Verdict {
 /** Every member's failure streaks, file by file, in log order. */
 export function memberResults(records: VerifyRecord[]): MemberResult[] {
   const byFile = new Map<string, VerifyRecord[]>();
-  for (const r of records) byFile.set(r.file, [...(byFile.get(r.file) ?? []), r]);
+  for (const r of records) {
+    const runs = byFile.get(r.file);
+    if (runs === undefined) byFile.set(r.file, [r]);
+    else runs.push(r);
+  }
 
   const results: MemberResult[] = [];
   for (const [file, runs] of byFile) {
@@ -346,9 +350,10 @@ export function snapshotDiff(logDir: string, fromHash: string | null, toHash: st
       { cwd: blobs, encoding: "utf-8", stdio: ["ignore", "pipe", "pipe"] },
     );
   } catch (e: any) {
-    // `git diff --no-index` exits 1 when the files differ; anything else is a failed comparison.
+    // `git diff --no-index` exits 1 when the files differ; anything else (another
+    // exit code, or no status because git was killed or never ran) is a failed comparison.
     const stdout = typeof e?.stdout === "string" ? e.stdout : "";
-    return e?.status === 1 && e?.signal == null && stdout.startsWith("diff --git ") ? stdout : null;
+    return e?.status === 1 && stdout.startsWith("diff --git ") ? stdout : null;
   }
 }
 
@@ -408,6 +413,16 @@ export function runsReport(logDir: string): RunsReport {
   };
 }
 
+/** Whether `git` can be run, which snapshot diffs need. */
+function gitAvailable(): boolean {
+  try {
+    execFileSync("git", ["--version"], { stdio: "ignore" });
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 /**
  * `lsc runs [--json] [--config=<path>]`: report the log that `lsc check` and
  * `lsc regen` record to from the current directory. Recording settings don't
@@ -429,5 +444,10 @@ export function runRuns(args: string[]): void {
   const probe = path.join(process.cwd(), ".lemmascript-runs-probe.ts");
   const { configFile } = loadConfigOptions(probe, configPath);
   const report = runsReport(resolveLogDir(probe, configFile));
+  // Missing evidence looks the same whatever the cause, so say when it is git;
+  // stderr keeps `--json` output clean.
+  if (report.catches.some(c => c.evidence?.diff === null) && !gitAvailable()) {
+    console.error("warning: git is not available, so source fixes have no diff or hint");
+  }
   console.log(json ? JSON.stringify(report, null, 2) : formatText(report));
 }

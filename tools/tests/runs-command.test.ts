@@ -16,6 +16,7 @@ import {
 
 const cli = fileURLToPath(new URL("../src/lsc.ts", import.meta.url));
 const loader = createRequire(import.meta.url).resolve("tsx");
+const posixOnly = { skip: process.platform === "win32" };
 
 /**
  * A run log built in order: each record gets id `r1`, `r2`, … and a timestamp
@@ -475,6 +476,18 @@ test("lsc runs --json prints the report as JSON", () =>
     const report = JSON.parse(result.stdout);
     assert.equal(report.log, join(dir, ".lemmascript", "runs.jsonl"));
     assert.deepEqual(report.counts, { catches: 1, sourceFix: 1, proof: 0, flaky: 0, open: 0, dropped: 0 });
+    assert.equal(result.stderr, "");
+  }));
+
+test("without git, lsc runs warns that source fixes have no diff, and the JSON stays clean", posixOnly, () =>
+  withLogDir(dir => {
+    writeFileSync(join(dir, "lemmascript.json"), "{}\n");
+    writeCatchLog(dir);
+    mkdirSync(join(dir, "no-git"));
+    const result = lsc(dir, ["runs", "--json"], { PATH: join(dir, "no-git") });
+    assert.equal(result.status, 0, result.stderr);
+    assert.deepEqual(JSON.parse(result.stdout).catches[0].evidence, { hint: null, diff: null });
+    assert.match(result.stderr, /^warning: git is not available, so source fixes have no diff or hint\n$/);
   }));
 
 test("lsc runs --config reads the log beside the chosen lemmascript.json", () =>

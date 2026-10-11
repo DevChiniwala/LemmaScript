@@ -155,7 +155,8 @@ source-fix  arraySum.ts  arraySum  failed 16:38, fixed 16:45  hint: code
 
 The log is found as `run-log` above describes, or beside `--config=<path>`. Times are
 local. `--json` prints the full report, with UTC times and each source fix's diff.
-`lsc runs` reads an existing log even when recording is turned off.
+The diff needs `git`; without it, source fixes have no diff or hint, and `lsc runs`
+prints a warning. `lsc runs` reads an existing log even when recording is turned off.
 
 ## Batch mode
 

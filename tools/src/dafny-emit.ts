@@ -1516,14 +1516,22 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
 ];
 
 /**
+ * The names of the functions, predicates, lemmas and methods declared in Dafny
+ * `text`, in order: a declaration starts its line, may carry modifiers
+ * (`ghost`, `opaque`, …) and attributes (`{:axiom}`), and is never in a comment.
+ */
+export function declaredNames(text: string): string[] {
+  const declaration = /^\s*(?:(?:ghost|opaque|static|twostate|least|greatest)\s+)*(?:function|predicate|lemma|method)(?:\s+\{:[^}]*\})*\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
+  return [...text.matchAll(declaration)].map(m => m[1]);
+}
+
+/**
  * Every function, predicate, lemma and method the preambles declare, so tools reading
  * Dafny results can tell lsc's own helpers from the user's members. The
  * profile-dependent entries only change literals, so either variant gives the same names.
  */
 export const DAFNY_HELPER_NAMES: ReadonlySet<string> = new Set(
-  PREAMBLE_CODE.flatMap(([, code]) =>
-    [...(typeof code === "function" ? code() : code).matchAll(/^\s*(?:function|predicate|lemma|method)(?:\s+\{:[^}]*\})*\s+([A-Za-z_][A-Za-z0-9_]*)/gm)]
-      .map(m => m[1])),
+  PREAMBLE_CODE.flatMap(([, code]) => declaredNames(typeof code === "function" ? code() : code)),
 );
 
 // ── Constructor and record helpers ───────────────────────────
