@@ -8,7 +8,8 @@
  * function (lsc's generated helpers left out), and each catch is classified
  * by what changed between its first failing run and its passing run. A
  * source fix also gets the diff of its two `.ts` snapshots and a hint at
- * whether the code, the spec or only the proof changed.
+ * whether the code, the spec or only the proof changed. `runsReport` gathers
+ * all of this as data (what `--json` prints) and `formatText` summarises it.
  */
 
 import { execFileSync } from "child_process";
@@ -16,7 +17,7 @@ import { existsSync } from "fs";
 import path from "path";
 import { DAFNY_HELPER_NAMES, ENSURES_LEMMA_SUFFIX } from "./dafny-emit.js";
 import type { AnnotKind } from "./extract.js";
-import type { VerifyRecord } from "./run-log.js";
+import { readRecords, type VerifyRecord } from "./run-log.js";
 
 /**
  * Whether each `//@` keyword the extractor parses states what a function
@@ -80,6 +81,47 @@ export interface FunctionResult {
   droppedRun?: VerifyRecord;
 }
 
+/** A failure in one TypeScript function that a later run fixed. Runs are named by id; times are UTC. */
+export interface Catch {
+  /** `<first failing run id>:<function>`, stable across reports of the same log. */
+  id: string;
+  file: string;
+  function: string;
+  members: string[];
+  kind: CatchKind;
+  failedAt: string;
+  failedRun: string;
+  fixedAt: string;
+  fixedRun: string;
+  /** Source fixes only; both null when a snapshot is missing. */
+  evidence?: { hint: ChangeHint | null; diff: string | null };
+}
+
+/** A failure not fixed: still failing (open), or its function went away (dropped, with `droppedRun`). */
+export interface Unfixed {
+  file: string;
+  function: string;
+  members: string[];
+  failedAt: string;
+  failedRun: string;
+  droppedRun?: string;
+}
+
+/** Everything `lsc runs` reports about one log; `lsc runs --json` prints it as is. */
+export interface RunsReport {
+  v: 1;
+  /** Absolute path of runs.jsonl. */
+  log: string;
+  runs: number;
+  files: number;
+  from: string | null;
+  to: string | null;
+  counts: { catches: number; sourceFix: number; proof: number; flaky: number; open: number; dropped: number };
+  catches: Catch[];
+  open: Unfixed[];
+  dropped: Unfixed[];
+}
+
 /**
  * A member missing from a partial run (filtered, or one Dafny never reached)
  * was not checked; missing from a complete run, it is gone.
@@ -102,7 +144,10 @@ export function memberResults(records: VerifyRecord[]): MemberResult[] {
       let failedRun: VerifyRecord | null = null;
       for (const run of runs) {
         const v = verdict(run, member);
-        if (v === "fail") { failedRun ??= run; continue; }
+        if (v === "fail") {
+          if (failedRun === null) failedRun = run;
+          continue;
+        }
         if (failedRun === null || v === "unchecked") continue;
         results.push(v === "pass"
           ? { file, member, status: "caught", failedRun, fixedRun: run }
@@ -182,6 +227,62 @@ export function changeHint(diff: string): ChangeHint {
   return changed.has("spec") ? "spec" : "proof";
 }
 
+/** A UTC timestamp's date (`2026-10-06`) and time (`14:13`) in `timeZone`, or the local zone when undefined. */
+function localTime(ts: string, timeZone: string | undefined): { date: string; time: string } {
+  const format = new Intl.DateTimeFormat("en-US", {
+    timeZone, year: "numeric", month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hourCycle: "h23",
+  });
+  const part = Object.fromEntries(format.formatToParts(new Date(ts)).map(p => [p.type, p.value]));
+  return { date: `${part.year}-${part.month}-${part.day}`, time: `${part.hour}:${part.minute}` };
+}
+
+/** `1 run`, `3 runs`. */
+function count(n: number, noun: string): string {
+  return `${n} ${noun}${n === 1 ? "" : "s"}`;
+}
+
+/** Rows as aligned columns, two spaces apart; a row's last cell is never padded. */
+function columns(rows: string[][]): string[] {
+  const widths: number[] = [];
+  for (const row of rows) {
+    for (let i = 0; i < row.length; i++) widths[i] = Math.max(widths[i] ?? 0, row[i].length);
+  }
+  return rows.map(row => row.map((cell, i) => i < row.length - 1 ? cell.padEnd(widths[i]) : cell).join("  "));
+}
+
+/**
+ * The human summary of a report: the log's span and counts, then one line per
+ * catch, open and dropped failure. Times are shown in `timeZone` (the local
+ * zone by default), with dates only when the log spans more than one day;
+ * open and dropped failures always show the date they first failed.
+ */
+export function formatText(report: RunsReport, timeZone?: string): string {
+  if (report.runs === 0 || report.from === null || report.to === null) return `No runs recorded yet in ${report.log}.`;
+  const from = localTime(report.from, timeZone);
+  const to = localTime(report.to, timeZone);
+  const oneDay = from.date === to.date;
+  const dated = (ts: string) => { const t = localTime(ts, timeZone); return `${t.date} ${t.time}`; };
+  const when = (ts: string) => oneDay ? localTime(ts, timeZone).time : dated(ts);
+  const c = report.counts;
+
+  const lines = [
+    `${count(report.runs, "run")}, ${count(report.files, "file")}, ${from.date} ${from.time} → ${oneDay ? to.time : `${to.date} ${to.time}`}`,
+    "",
+    `catches: ${c.catches}   (source-fix ${c.sourceFix}, proof ${c.proof}, flaky ${c.flaky})`,
+    `open: ${c.open}   dropped: ${c.dropped}`,
+  ];
+  const rows = [
+    ...report.catches.map(k => [
+      k.kind, k.file, k.function, `failed ${when(k.failedAt)}, fixed ${when(k.fixedAt)}`,
+      ...(k.evidence?.hint ? [`hint: ${k.evidence.hint}`] : []),
+    ]),
+    ...report.open.map(o => ["open", o.file, o.function, `failed ${dated(o.failedAt)}`]),
+    ...report.dropped.map(d => ["dropped", d.file, d.function, `failed ${dated(d.failedAt)}`]),
+  ];
+  if (rows.length > 0) lines.push("", ...columns(rows));
+  return lines.join("\n");
+}
+
 /**
  * The unified diff between two `.ts` snapshots in `<logDir>/.lemmascript/blobs/`,
  * or null when either is missing, a hash isn't a snapshot hash, or git can't
@@ -205,4 +306,65 @@ export function snapshotDiff(logDir: string, fromHash: string | null, toHash: st
     const stdout = typeof e?.stdout === "string" ? e.stdout : "";
     return e?.status === 1 && e?.signal == null && stdout.startsWith("diff --git ") ? stdout : null;
   }
+}
+
+/** Order ISO timestamps oldest first. */
+function byTime(a: string, b: string): number {
+  return a < b ? -1 : a > b ? 1 : 0;
+}
+
+/** A caught function result as a catch, with diff evidence when the source changed. */
+function toCatch(logDir: string, r: FunctionResult): Catch {
+  const fixedRun = r.fixedRun!;
+  const kind = classify(r.failedRun, fixedRun);
+  const result: Catch = {
+    id: `${r.failedRun.id}:${r.function}`, file: r.file, function: r.function, members: r.members, kind,
+    failedAt: r.failedRun.ts, failedRun: r.failedRun.id, fixedAt: fixedRun.ts, fixedRun: fixedRun.id,
+  };
+  if (kind === "source-fix") {
+    const diff = snapshotDiff(logDir, r.failedRun.tsHash, fixedRun.tsHash);
+    result.evidence = { hint: diff === null ? null : changeHint(diff), diff };
+  }
+  return result;
+}
+
+/** An open or dropped function result, named by run ids. */
+function toUnfixed(r: FunctionResult): Unfixed {
+  return {
+    file: r.file, function: r.function, members: r.members, failedAt: r.failedRun.ts, failedRun: r.failedRun.id,
+    ...(r.droppedRun ? { droppedRun: r.droppedRun.id } : {}),
+  };
+}
+
+/**
+ * Read `<logDir>/.lemmascript/runs.jsonl` and report its catches (ordered by
+ * fix time) and its open and dropped failures (ordered by failure time).
+ */
+export function runsReport(logDir: string): RunsReport {
+  const records = readRecords(logDir);
+  const results = groupByFunction(memberResults(records));
+  const catches = results.filter(r => r.status === "caught").map(r => toCatch(logDir, r))
+    .sort((a, b) => byTime(a.fixedAt, b.fixedAt));
+  const unfixed = (status: FunctionResult["status"]) => results.filter(r => r.status === status).map(toUnfixed)
+    .sort((a, b) => byTime(a.failedAt, b.failedAt));
+  const open = unfixed("open");
+  const dropped = unfixed("dropped");
+  const times = records.map(r => r.ts).sort(byTime);
+  return {
+    v: 1,
+    log: path.join(path.resolve(logDir), ".lemmascript", "runs.jsonl"),
+    runs: records.length,
+    files: new Set(records.map(r => r.file)).size,
+    from: times[0] ?? null,
+    to: times[times.length - 1] ?? null,
+    counts: {
+      catches: catches.length,
+      sourceFix: catches.filter(c => c.kind === "source-fix").length,
+      proof: catches.filter(c => c.kind === "proof").length,
+      flaky: catches.filter(c => c.kind === "flaky").length,
+      open: open.length,
+      dropped: dropped.length,
+    },
+    catches, open, dropped,
+  };
 }

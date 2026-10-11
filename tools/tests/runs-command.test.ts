@@ -7,7 +7,8 @@ import { emitDafnyFile } from "../src/dafny-emit.ts";
 import type { Module } from "../src/ir.ts";
 import type { VerifyRecord } from "../src/run-log.ts";
 import {
-  changeHint, classify, functionOf, groupByFunction, memberResults, snapshotDiff, type FunctionResult, type MemberResult,
+  changeHint, classify, formatText, functionOf, groupByFunction, memberResults, runsReport, snapshotDiff,
+  type FunctionResult, type MemberResult, type RunsReport,
 } from "../src/runs-command.ts";
 
 /**
@@ -84,6 +85,29 @@ index 179f419..009d3d2 100644
    return shares;
  }
 `;
+
+/** Write `records` as the project's runs.jsonl. */
+function writeLog(logDir: string, records: VerifyRecord[]): void {
+  writeFileSync(join(logDir, ".lemmascript", "runs.jsonl"), records.map(r => JSON.stringify(r)).join("\n") + "\n");
+}
+
+/** A report for formatText: three runs of splitBill.ts on 6 October (UTC), nothing caught unless overridden. */
+function textReport(overrides: Partial<RunsReport>): RunsReport {
+  return {
+    v: 1, log: "/project/.lemmascript/runs.jsonl", runs: 3, files: 1,
+    from: "2026-10-06T14:13:22.844Z", to: "2026-10-06T14:17:20.016Z",
+    counts: { catches: 0, sourceFix: 0, proof: 0, flaky: 0, open: 0, dropped: 0 },
+    catches: [], open: [], dropped: [],
+    ...overrides,
+  };
+}
+
+// The agent trial's catch, as the report gives it.
+const SPLIT_BILL_CATCH: RunsReport["catches"][number] = {
+  id: "r1:splitBill", file: "splitBill.ts", function: "splitBill", members: ["splitBill"], kind: "source-fix",
+  failedAt: "2026-10-06T14:13:22.844Z", failedRun: "r1", fixedAt: "2026-10-06T14:17:18.737Z", fixedRun: "r2",
+  evidence: { hint: "code", diff: AGENT_TRIAL_DIFF },
+};
 
 // Member results: each Dafny member's failure streaks, marked caught, open or dropped.
 
@@ -254,3 +278,131 @@ for (const [name, diff, hint] of [
     assert.equal(changeHint(diff), hint);
   });
 }
+
+// The report: the whole log as data, which `lsc runs --json` prints as is.
+
+test("runsReport reports the agent trial's fix as one source-fix catch with its diff and hint", () =>
+  withLogDir((logDir, blobs) => {
+    writeFileSync(join(blobs, "6604d7614b7d.ts"), "const shares = [share];\n");
+    writeFileSync(join(blobs, "410875aff690.ts"), "const remainder = total - share * people;\nconst shares = [share + 1];\n");
+    const members = ["JSFloorDiv", "splitBill", "sumCents"];
+    writeLog(logDir, log(
+      { file: "splitBill.ts", failed: ["splitBill"], passed: ["JSFloorDiv", "sumCents"], tsHash: "6604d7614b7d" },
+      { file: "splitBill.ts", cmd: "regen", passed: members, tsHash: "410875aff690", dfyHash: "cccccccccccc" },
+      { file: "splitBill.ts", passed: members, tsHash: "410875aff690", dfyHash: "cccccccccccc" },
+    ));
+    assert.deepEqual(runsReport(logDir), {
+      v: 1, log: join(logDir, ".lemmascript", "runs.jsonl"), runs: 3, files: 1,
+      from: "2026-10-06T01:00:00.000Z", to: "2026-10-06T01:02:00.000Z",
+      counts: { catches: 1, sourceFix: 1, proof: 0, flaky: 0, open: 0, dropped: 0 },
+      catches: [{
+        id: "r1:splitBill", file: "splitBill.ts", function: "splitBill", members: ["splitBill"], kind: "source-fix",
+        failedAt: "2026-10-06T01:00:00.000Z", failedRun: "r1", fixedAt: "2026-10-06T01:01:00.000Z", fixedRun: "r2",
+        evidence: { hint: "code", diff: snapshotDiff(logDir, "6604d7614b7d", "410875aff690") },
+      }],
+      open: [], dropped: [],
+    });
+  }));
+
+test("runsReport orders catches by fix time and open or dropped failures by failure time", () =>
+  withLogDir(logDir => {
+    writeLog(logDir, log(
+      { file: "a.ts", failed: ["p"] },
+      { file: "b.ts", failed: ["q"] },
+      { file: "b.ts", passed: ["q"] },                              // q: nothing changed → flaky
+      { file: "a.ts", passed: ["p"], dfyHash: "dddddddddddd" },     // p: only the proof changed
+      { file: "c.ts", passed: ["o"] },
+      { file: "d.ts", failed: ["x"] },
+      { file: "c.ts", failed: ["o"] },
+      { file: "e.ts", failed: ["g"] },
+      { file: "e.ts", passed: ["h"] },                              // g is gone → dropped
+    ));
+    const report = runsReport(logDir);
+    assert.equal(report.files, 5);
+    assert.deepEqual(report.counts, { catches: 2, sourceFix: 0, proof: 1, flaky: 1, open: 2, dropped: 1 });
+    assert.deepEqual(report.catches.map(c => `${c.function} ${c.kind}`), ["q flaky", "p proof"]);
+    assert.ok(report.catches.every(c => !("evidence" in c)), "only source fixes carry evidence");
+    assert.deepEqual(report.open.map(o => o.function), ["x", "o"]);
+    assert.ok(report.open.every(o => !("droppedRun" in o)));
+    assert.deepEqual(report.dropped, [
+      { file: "e.ts", function: "g", members: ["g"], failedAt: "2026-10-06T01:07:00.000Z", failedRun: "r8", droppedRun: "r9" },
+    ]);
+  }));
+
+test("runsReport gives a source fix with a missing snapshot null evidence", () =>
+  withLogDir(logDir => {
+    writeLog(logDir, log({ failed: ["f"] }, { passed: ["f"], tsHash: "cccccccccccc" }));
+    assert.deepEqual(runsReport(logDir).catches[0].evidence, { hint: null, diff: null });
+  }));
+
+test("runsReport on a project with no log reports zero runs", () =>
+  withLogDir(logDir => {
+    assert.deepEqual(runsReport(logDir), {
+      v: 1, log: join(logDir, ".lemmascript", "runs.jsonl"), runs: 0, files: 0, from: null, to: null,
+      counts: { catches: 0, sourceFix: 0, proof: 0, flaky: 0, open: 0, dropped: 0 },
+      catches: [], open: [], dropped: [],
+    });
+  }));
+
+// Text summary: what `lsc runs` prints, built only from the report.
+
+test("formatText summarises a source fix with its times and hint", () => {
+  const report = textReport({ counts: { catches: 1, sourceFix: 1, proof: 0, flaky: 0, open: 0, dropped: 0 }, catches: [SPLIT_BILL_CATCH] });
+  assert.equal(formatText(report, "UTC"), [
+    "3 runs, 1 file, 2026-10-06 14:13 → 14:17",
+    "",
+    "catches: 1   (source-fix 1, proof 0, flaky 0)",
+    "open: 0   dropped: 0",
+    "",
+    "source-fix  splitBill.ts  splitBill  failed 14:13, fixed 14:17  hint: code",
+  ].join("\n"));
+});
+
+test("formatText lists open and dropped failures after catches, with the date they first failed", () => {
+  const report = textReport({
+    files: 2,
+    counts: { catches: 1, sourceFix: 0, proof: 1, flaky: 0, open: 1, dropped: 1 },
+    catches: [{
+      id: "r1:sumCents", file: "splitBill.ts", function: "sumCents", members: ["sumCents_ensures"], kind: "proof",
+      failedAt: "2026-10-06T14:13:22.844Z", failedRun: "r1", fixedAt: "2026-10-06T14:17:18.737Z", fixedRun: "r2",
+    }],
+    open: [{ file: "splitBill.ts", function: "splitBill", members: ["splitBill"], failedAt: "2026-10-06T14:15:00.000Z", failedRun: "r3" }],
+    dropped: [{ file: "old.ts", function: "legacy", members: ["legacy"], failedAt: "2026-10-06T14:14:00.000Z", failedRun: "r4", droppedRun: "r5" }],
+  });
+  assert.equal(formatText(report, "UTC"), [
+    "3 runs, 2 files, 2026-10-06 14:13 → 14:17",
+    "",
+    "catches: 1   (source-fix 0, proof 1, flaky 0)",
+    "open: 1   dropped: 1",
+    "",
+    "proof    splitBill.ts  sumCents   failed 14:13, fixed 14:17",
+    "open     splitBill.ts  splitBill  failed 2026-10-06 14:15",
+    "dropped  old.ts        legacy     failed 2026-10-06 14:14",
+  ].join("\n"));
+});
+
+test("formatText shows dates when the log spans more than one day", () => {
+  const catchNextDay = { ...SPLIT_BILL_CATCH, fixedAt: "2026-10-07T09:00:00.000Z" };
+  const report = textReport({ to: "2026-10-07T09:00:00.000Z", counts: { catches: 1, sourceFix: 1, proof: 0, flaky: 0, open: 0, dropped: 0 }, catches: [catchNextDay] });
+  const lines = formatText(report, "UTC").split("\n");
+  assert.equal(lines[0], "3 runs, 1 file, 2026-10-06 14:13 → 2026-10-07 09:00");
+  assert.equal(lines[lines.length - 1],"source-fix  splitBill.ts  splitBill  failed 2026-10-06 14:13, fixed 2026-10-07 09:00  hint: code");
+});
+
+test("formatText shows times in the time zone it is given", () => {
+  assert.equal(formatText(textReport({}), "Pacific/Auckland"), [
+    "3 runs, 1 file, 2026-10-07 03:13 → 03:17",
+    "",
+    "catches: 0   (source-fix 0, proof 0, flaky 0)",
+    "open: 0   dropped: 0",
+  ].join("\n"));
+});
+
+test("formatText counts one run and one file in the singular", () => {
+  assert.match(formatText(textReport({ runs: 1, files: 1 }), "UTC"), /^1 run, 1 file, /);
+});
+
+test("formatText says so when no runs are recorded", () => {
+  const report = textReport({ runs: 0, files: 0, from: null, to: null });
+  assert.equal(formatText(report, "UTC"), "No runs recorded yet in /project/.lemmascript/runs.jsonl.");
+});
