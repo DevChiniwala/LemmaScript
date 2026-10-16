@@ -737,7 +737,7 @@ function extractExpr(node: Expression): RawExpr {
 
 const PREFIX = "//@ ";
 const KEYWORDS = ["requires", "ensures", "contract", "invariant", "decreases", "done_with", "type"] as const;
-type AnnotKind = (typeof KEYWORDS)[number];
+export type AnnotKind = (typeof KEYWORDS)[number];
 interface Annotation { kind: AnnotKind; expr: string }
 
 function parseAnnotations(node: Node): Annotation[] {

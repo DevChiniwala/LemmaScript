@@ -1,6 +1,6 @@
 # DESIGN_RUN_LOG — Counting what verification caught
 
-**Status:** recording of `check` and `regen` runs is implemented (§1–§2). `lsc runs`, claimcheck records, labels and reports are not yet built. A stopgap wrapper on the `lemmascript-catch-log` branch of lemmascript-skills confirmed the Dafny CSV approach against `lsc` 0.6.1, passing the flag through `--extra-flags`; the implementation uses the text format instead (§2).
+**Status:** recording of `check` and `regen` runs is implemented (§1–§2), and so is `lsc runs` with `--json` over the whole log (§4, with the refinements noted there). Claimcheck records, labels and reports (`--all`, `runs label`, `runs report`) are not yet built. A stopgap wrapper on the `lemmascript-catch-log` branch of lemmascript-skills confirmed the Dafny CSV approach against `lsc` 0.6.1, passing the flag through `--extra-flags`; the implementation uses the text format instead (§2).
 **Date:** September 2026
 
 ## Goal
@@ -104,9 +104,9 @@ npx lsc runs --json          # machine-readable, with labeling evidence (combine
 npx lsc runs report          # write a dated report of everything not yet reported (§6)
 ```
 
-There are no sessions. `lsc runs` always derives catches from the whole log, because a failure can be fixed days after it happened, and then shows only what falls after the most recent report.
+There are no sessions. `lsc runs` always derives catches from the whole log, because a failure can be fixed days after it happened, and then shows only what falls after the most recent report. Only `lsc runs` and `lsc runs --json` exist so far: with no report markers, plain `lsc runs` already covers the whole log, so `--all` arrives with reports (§6).
 
-**A verify catch** is a member `M` in file `F` that appears in `failed` in some run, and in `passed` in the first later run of `F` that reported on `M`. Runs that did not report on `M` (a `diff`, `resolve` or `conflict` stage, `--no-verify`, or a filter) are skipped. Its kind comes from comparing the hashes of the two runs:
+**A verify catch** starts with a member `M` in file `F` that appears in `failed` in some run, and in `passed` in the first later run of `F` that reported on `M`. Runs that did not report on `M` (a `diff`, `resolve` or `conflict` stage, `--no-verify`, or a filter) are skipped, so consecutive failures form one streak. Its kind comes from comparing the hashes of the streak's first failing run with the passing run, so a fix made across several attempts still counts as a `source-fix` when the `.ts` changed at any point:
 
 | `.ts` changed | `.dfy` changed | Kind |
 |---|---|---|
@@ -125,17 +125,20 @@ There are no sessions. `lsc runs` always derives catches from the whole log, bec
 
 A failure that has no later pass yet is **open**. If a member is missing from a later run that is not `partial`, because it was renamed or deleted, the failure is reported as **dropped**, never as a catch.
 
-Each catch has an ID, formed from the failing run and the member name, such as `r_7f3a:applyDiscount_ensures`.
+**One catch per TypeScript function.** Member catches are then merged per TypeScript function, because the counts exist to show impact, and a broken function is what a user would report. A function is failing while any of its members (the function and its `_ensures` lemma) is, so member failures that overlap form one catch, from the earliest failure to the run where the last member passed. lsc's generated preamble helpers (such as `JSFloorDiv`) are never counted. `--json` keeps the full member list for every catch.
 
-**Evidence for labeling.** In `--json` output, each `source-fix` catch carries the unified diff of the `.ts` between the two runs' snapshots, the failing run's `errors`, and a mechanical `change` hint:
+Each catch has an ID, formed from the first failing run and the function name, such as `r_7f3a:applyDiscount`.
 
-| `change` | Meaning | Likely label |
+**Evidence for labeling.** In `--json` output, each `source-fix` catch carries the unified diff of the `.ts` between the two runs' snapshots and a mechanical `hint`. A fix to code usually updates the loop invariants that describe it too, so `//@` lines are split into spec (`requires`, `ensures`, `contract`) and proof scaffolding (`invariant`, `decreases`, `assert`, …) rather than counted together:
+
+| `hint` | Meaning | Likely label |
 |---|---|---|
-| `annotations-only` | Every changed line is a `//@` line. | `spec-bug` |
-| `code-only` | No changed line is a `//@` line. | `impl-bug` |
-| `mixed` | Both kinds of line changed. | Needs judgment. |
+| `code` | Code changed; spec lines did not. | `impl-bug` |
+| `spec` | Spec lines changed; code did not. | `spec-bug` |
+| `mixed` | Both code and spec lines changed. | Needs judgment. |
+| `proof` | Only proof scaffolding or comments changed. | `not-a-bug` |
 
-The hint is a starting point, not a label. A `code-only` diff can still be an unrelated edit in the same file.
+The hint is a starting point, not a label. A `code` diff can still be an unrelated edit in the same file. The diff and hint are `null` when a snapshot is missing.
 
 ## 5. Labels at report time
 
@@ -147,7 +150,7 @@ A reporting skill, `lemmascript-catch-report`, does it. It is meant to run in a 
 2. For each unlabeled `source-fix` catch, reads the diff, the error that preceded it, and the `change` hint, and records a label:
 
    ```sh
-   npx lsc runs label r_7f3a:applyDiscount_ensures impl-bug "discount could exceed subtotal"
+   npx lsc runs label r_7f3a:applyDiscount impl-bug "discount could exceed subtotal"
    ```
 
 3. Runs `lsc runs report` to write the dated report, then relays its counts and the `impl-bug` and `spec-bug` catches with their notes.
@@ -155,7 +158,7 @@ A reporting skill, `lemmascript-catch-report`, does it. It is meant to run in a 
 The labels for a `source-fix` catch are `impl-bug` (the TypeScript computed the wrong thing), `spec-bug` (the `requires` or `ensures` was wrong), and `not-a-bug` (the `.ts` changed for another reason, such as an unrelated edit in the same file). When one change fixed both code and spec, the label is `impl-bug`. `lsc runs label` refuses an ID that is not in the log and a label that does not fit the catch. The label is appended as its own record, and a later label for the same catch replaces an earlier one:
 
 ```json
-{"type":"label","catch":"r_7f3a:applyDiscount_ensures","label":"impl-bug","note":"discount could exceed subtotal","ts":"..."}
+{"type":"label","catch":"r_7f3a:applyDiscount","label":"impl-bug","note":"discount could exceed subtotal","ts":"..."}
 ```
 
 Open claimcheck disputes are not labeled by the agent. A dispute is an intent question for the user, so the report lists open disputes with claimcheck's discrepancy text. If the user decides one is a false positive, it is recorded with the label `false-positive` and the user's reason.
@@ -196,7 +199,7 @@ claimcheck:  5 resolved, 1 open (1 marked false-positive)
   both-fixed      0
   flaky           1
 
-impl-bug   r_7f3a:applyDiscount_ensures   src/domain.ts   failed 2026-09-29
+impl-bug   r_7f3a:applyDiscount   src/domain.ts   failed 2026-09-29
            discount could exceed subtotal
 ...
 ```
@@ -219,10 +222,11 @@ The report file ends with one line per catch: its kind, label, file, failure dat
 | File | Change |
 |---|---|
 | `tools/src/config.ts` | Add a `run-log` registry entry (boolean, default `true`, config-only). |
-| `tools/src/run-log.ts` (new) | Create `.lemmascript/` with its `.gitignore`, append records, hash and snapshot files, read Dafny's text results file, derive catches, compute diffs and `change` hints, write labels, write dated reports and their markers. |
+| `tools/src/run-log.ts` (new) | Create `.lemmascript/` with its `.gitignore`, append records, hash and snapshot files, read Dafny's text results file, and read records back. |
+| `tools/src/runs-command.ts` (new) | `lsc runs`: derive catches, open and dropped failures per TypeScript function, compute diffs and hints, and print text or JSON. Later: write labels, dated reports and their markers. |
 | `tools/src/dafny-commands.ts` | `dafnyCheckDiff`, `dafnyVerify` and `dafnyRegen` take an optional log context, and each records the stage it detects; recording lives there only because these helpers end runs with `process.exit`, and would move to `lsc.ts` if they returned outcomes instead. `dafnyVerify` adds `--log-format text` and reads the member outcomes after Dafny exits; Dafny's output stays inherited. |
 | `tools/src/lsc.ts` | Pass the log context from resolved options. Record claimcheck results in both branches. Add the `runs`, `runs label`, and `runs report` subcommands. |
-| `tools/fixtures/` | One fixture that goes fail → proof fix → pass, one that goes fail → code fix → pass (`code-only`), and one that goes fail → annotation fix → pass (`annotations-only`), checking the derived kinds and hints. |
+| `tools/test-fixtures.sh` | One project that goes fail → proof fix → pass, then fail → code fix → pass under `regen`, checking that `lsc runs --json` reports a `proof` catch and a `source-fix` with hint `code`. Every hint is covered by unit tests in `runs-command.test.ts`. |
 | `lemmascript-catch-report` skill (new, in lemmascript-skills) | Label unlabeled `source-fix` catches from `lsc runs --json` evidence, list open claimcheck disputes for the user, and write the report. |
 
 The `lemmascript` skill needs no change for logging. The counting logic lives in `lsc`, where it has tests, and the skill only applies judgment on top of it.

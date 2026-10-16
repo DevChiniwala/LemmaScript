@@ -8,7 +8,7 @@ import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
 import { dafnyCheckDiff, dafnyRegen, dafnyVerify } from "../src/dafny-commands.ts";
 import {
-  RunLog, ensureLogDir, hashText, isPartialRun, parseTextLog, resolveLogDir, runLogEnabled, snapshotSource,
+  RunLog, ensureLogDir, hashText, isPartialRun, parseTextLog, readRecords, resolveLogDir, runLogEnabled, snapshotSource,
 } from "../src/run-log.ts";
 
 const posixOnly = { skip: process.platform === "win32" };
@@ -20,6 +20,26 @@ function tempDir(): string {
 function records(logDir: string): any[] {
   return readFileSync(join(logDir, ".lemmascript", "runs.jsonl"), "utf8")
     .trim().split("\n").map(line => JSON.parse(line));
+}
+
+/** A complete verify record as JSON, with `id` and any fields overridden (`undefined` removes one). */
+function recordLine(id: string, overrides: Record<string, unknown> = {}): string {
+  return JSON.stringify({
+    v: 1, type: "verify", id, ts: "2026-10-06T01:00:00.000Z", cmd: "check", file: "a.ts", stage: "ok", exit: 0,
+    partial: false, failed: [], passed: ["f"], tsHash: "aaaaaaaaaaaa", dfyHash: null, lsc: "0",
+    ...overrides,
+  });
+}
+
+/** The ids `readRecords` keeps from a log made of `lines`. */
+function readIds(lines: string[]): string[] {
+  const root = tempDir();
+  try {
+    writeFileSync(join(ensureLogDir(root), "runs.jsonl"), lines.join("\n") + "\n");
+    return readRecords(root).map(r => r.id);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
 }
 
 // Trimmed from real Dafny 4.11 `--log-format text` output for a broken arraySum.
@@ -341,6 +361,54 @@ test("discard ends a run without a record and removes Dafny's temporary results 
     log.finish({ stage: "ok", exit: 0, dfyPath: source });
     assert.equal(existsSync(folder), false);
     assert.equal(existsSync(join(root, ".lemmascript", "runs.jsonl")), false);
+  } finally {
+    rmSync(root, { recursive: true, force: true });
+  }
+});
+
+// Reading records.
+
+test("readRecords returns verify records in file order", () => {
+  assert.deepEqual(readIds([recordLine("a"), recordLine("b")]), ["a", "b"]);
+});
+
+test("readRecords skips unparseable lines, other record types and other schema versions", () => {
+  assert.deepEqual(readIds([
+    recordLine("a"),
+    "not json",
+    recordLine("b", { type: "claimcheck" }),
+    recordLine("c", { v: 2 }),
+    recordLine("d"),
+    '{"v":1,"type":"veri',
+  ]), ["a", "d"]);
+});
+
+// A hand-edited line must be skipped like an unparseable one, never crash or invent members.
+for (const [name, overrides] of [
+  ["no failed list", { failed: undefined }],
+  ["failed as a string", { failed: "foo" }],
+  ["a non-string member", { passed: ["f", 3] }],
+  ["no passed list", { passed: undefined }],
+  ["no timestamp", { ts: undefined }],
+  ["a timestamp that isn't a date", { ts: "yesterday" }],
+  ["no file", { file: undefined }],
+  ["a numeric id", { id: 7 }],
+  ["no partial flag", { partial: undefined }],
+  ["a numeric hash", { tsHash: 5 }],
+] as const) {
+  test(`readRecords skips a record with ${name}`, () => {
+    assert.deepEqual(readIds([recordLine("a"), recordLine("bad", overrides), recordLine("c")]), ["a", "c"]);
+  });
+}
+
+test("readRecords keeps a record whose hashes are null", () => {
+  assert.deepEqual(readIds([recordLine("a", { tsHash: null, dfyHash: null })]), ["a"]);
+});
+
+test("readRecords returns no records when there is no log", () => {
+  const root = tempDir();
+  try {
+    assert.deepEqual(readRecords(root), []);
   } finally {
     rmSync(root, { recursive: true, force: true });
   }

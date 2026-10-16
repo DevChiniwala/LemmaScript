@@ -3,8 +3,9 @@
  * `.lemmascript/runs.jsonl` (a run where Dafny is not installed records
  * nothing), with a snapshot of the source, so that a later
  * report can tell which failures were fixed and whether the fix changed the
- * program or only the proof. Logging must never change lsc's output or exit
- * code, so every filesystem step is best-effort and swallows its own errors.
+ * program or only the proof, and read the records back for that report.
+ * Logging must never change lsc's output or exit code, so every filesystem
+ * step is best-effort and swallows its own errors.
  */
 
 import { createHash, randomUUID } from "crypto";
@@ -95,6 +96,20 @@ export function parseTextLog(text: string): MemberResults {
   };
 }
 
+/**
+ * Whether a parsed log line is a verify record of this schema with every field
+ * reading it relies on, so a hand-edited line is skipped rather than misread.
+ */
+function isVerifyRecord(r: any): r is VerifyRecord {
+  const names = (x: unknown) => Array.isArray(x) && x.every(m => typeof m === "string");
+  const hash = (x: unknown) => x === null || typeof x === "string";
+  return r?.type === "verify" && r.v === RUN_LOG_SCHEMA_VERSION
+    && typeof r.id === "string" && typeof r.file === "string"
+    && typeof r.ts === "string" && !Number.isNaN(Date.parse(r.ts))
+    && typeof r.partial === "boolean" && names(r.failed) && names(r.passed)
+    && hash(r.tsHash) && hash(r.dfyHash);
+}
+
 /** First 12 hex characters of the SHA-256 of `text`. */
 export function hashText(text: string): string {
   return createHash("sha256").update(text).digest("hex").slice(0, 12);
@@ -123,6 +138,22 @@ export function snapshotSource(dir: string, text: string): string {
   const blob = path.join(dir, "blobs", `${hash}.ts`);
   if (!existsSync(blob)) writeFileSync(blob, text);
   return hash;
+}
+
+/**
+ * The `verify` records in `<logDir>/.lemmascript/runs.jsonl`, in file order.
+ * Skips lines that don't parse (such as a half-written last line), other
+ * record types, other schema versions and records missing a field or
+ * holding one of the wrong type; a missing log has no records.
+ */
+export function readRecords(logDir: string): VerifyRecord[] {
+  const text = safely(() => readFileSync(path.join(logDir, ".lemmascript", "runs.jsonl"), "utf8")) ?? "";
+  const records: VerifyRecord[] = [];
+  for (const line of text.split("\n")) {
+    const r = safely(() => JSON.parse(line));
+    if (isVerifyRecord(r)) records.push(r);
+  }
+  return records;
 }
 
 /**

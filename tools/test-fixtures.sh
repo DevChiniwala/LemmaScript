@@ -314,6 +314,24 @@ if (runs[1].dfyHash === runs[0].dfyHash || runs[2].dfyHash !== runs[0].dfyHash) 
 grep -qx '\*' "$run_log_dir/.lemmascript/.gitignore"
 expect_absent .lemmascript
 
+# lsc runs: a code bug in the .ts fails under regen and its removal passes, so
+# the log above now holds a proof catch (the proof edit) and a source-fix catch
+# whose diff changed only code.
+cp "$run_log_dir/arraySum.ts" "$run_log_dir/arraySum.ts.good"
+sed 's/sum = sum + arr\[i\];/sum = sum + arr[i] + 1;/' "$run_log_dir/arraySum.ts.good" > "$run_log_dir/arraySum.ts"
+expect_failure \
+  "run log fixture: arraySum with an off-by-one sum verified" \
+  env LSC_RUN_LOG=true npx tsx tools/src/lsc.ts regen --backend=dafny "$run_log_dir/arraySum.ts"
+mv "$run_log_dir/arraySum.ts.good" "$run_log_dir/arraySum.ts"
+LSC_RUN_LOG=true npx tsx tools/src/lsc.ts regen --backend=dafny "$run_log_dir/arraySum.ts"
+npx tsx tools/src/lsc.ts runs --json --config="$run_log_dir/lemmascript.json" | node -e '
+const report = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const fail = msg => { console.error("ERROR: lsc runs fixture: " + msg); process.exit(1); };
+const caught = report.catches.map(c => `${c.function} ${c.kind} ${c.evidence?.hint ?? "-"}`).join(", ");
+if (caught !== "arraySum proof -, arraySum source-fix code") fail("catches were " + caught);
+if (report.open.length + report.dropped.length !== 0) fail("expected no open or dropped failures");
+'
+
 # "run-log": false in lemmascript.json keeps logging off; LSC_RUN_LOG=true leaves
 # the decision to the config rather than overriding it.
 run_log_off_dir="$fixture_dir/run-log-off-project"

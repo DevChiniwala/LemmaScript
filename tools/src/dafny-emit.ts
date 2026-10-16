@@ -9,6 +9,9 @@ import { freshName, freshNameWhere, userNames } from "./names.js";
 import { renameFreeVar } from "./transform.js";
 import { DEFAULT_OPTIONS, resolveOptions, type LscOptions } from "./config.js";
 
+/** Appended to a function's name for the lemma that carries its `//@ ensures`. */
+export const ENSURES_LEMMA_SUFFIX = "_ensures";
+
 /** Fresh binder for a comprehension wrapping the given subexpressions: `base`
  *  verbatim unless one of them references it, then primed until free. A *local*
  *  check — a same-named name elsewhere in the module keeps the plain binder. */
@@ -896,7 +899,7 @@ function emitDecl(d: Decl): string {
         // Strip constraints like (==) from type params — ghost lemmas don't need them
         const lemmaTP = d.typeParams.length > 0 ? `<${d.typeParams.map(t => t.replace(/\(.*\)/, '')).join(", ")}>` : "";
         lines.push("");
-        lines.push(`lemma ${escapeGeneratedName(`${d.name}_ensures`)}${lemmaTP}(${paramList(d.params)})`);
+        lines.push(`lemma ${escapeGeneratedName(`${d.name}${ENSURES_LEMMA_SUFFIX}`)}${lemmaTP}(${paramList(d.params)})`);
         for (const r of d.requires) lines.push(`  requires ${emitExpr(r)}`);
         for (const e of d.ensures) lines.push(`  ensures ${emitExpr(e)}`);
         lines.push(`{`);
@@ -1511,6 +1514,25 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["Perm", PERM],
   ["SetFromSeq", SET_FROM_SEQ],
 ];
+
+/**
+ * The names of the functions, predicates, lemmas and methods declared in Dafny
+ * `text`, in order: a declaration starts its line, may carry modifiers
+ * (`ghost`, `opaque`, …) and attributes (`{:axiom}`), and is never in a comment.
+ */
+export function declaredNames(text: string): string[] {
+  const declaration = /^\s*(?:(?:ghost|opaque|static|twostate|least|greatest)\s+)*(?:function|predicate|lemma|method)(?:\s+\{:[^}]*\})*\s+([A-Za-z_][A-Za-z0-9_]*)/gm;
+  return [...text.matchAll(declaration)].map(m => m[1]);
+}
+
+/**
+ * Every function, predicate, lemma and method the preambles declare, so tools reading
+ * Dafny results can tell lsc's own helpers from the user's members. The
+ * profile-dependent entries only change literals, so either variant gives the same names.
+ */
+export const DAFNY_HELPER_NAMES: ReadonlySet<string> = new Set(
+  PREAMBLE_CODE.flatMap(([, code]) => declaredNames(typeof code === "function" ? code() : code)),
+);
 
 // ── Constructor and record helpers ───────────────────────────
 
