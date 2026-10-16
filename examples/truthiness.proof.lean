@@ -1,77 +1,45 @@
 import «truthiness.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 -- These functions are expression-bodied, so the Lean backend emits a `Pure.*`
--- mirror and the method just delegates (`return Pure.f x`). `loom_solve`'s SMT
--- backend treats that mirror as opaque, so we discharge each postcondition by
--- unfolding the mirror and simplifying — the `simp` IS the truthiness check.
-
--- This pinned toolchain has no `String.length_eq_zero_iff`; reconstruct it from
--- the underlying char list so the string-truthiness `optStrCond` arm can close.
-private theorem str_length_eq_zero_iff {s : String} : s.length = 0 ↔ s = "" := by
-  cases s
-  simp [String.length, String.ext_iff, List.length_eq_zero_iff]
+-- mirror and the method just delegates (`return Pure.f x`). The verifier
+-- treats that mirror as opaque, so each VC discharger supplies the mirror's
+-- definition to `finish` to check the corresponding truthiness rule.
 
 prove_correct boolCond by
-  loom_goals_intro
-  loom_unfold
-  all_goals (cases b <;> simp_all [Pure.boolCond])
+  velvet_vcgen [boolCond] with finish [Pure.boolCond]
 
 prove_correct numCond by
-  loom_goals_intro
-  loom_unfold
-  all_goals simp_all [Pure.numCond]
+  velvet_vcgen [numCond] with finish [Pure.numCond]
 
 prove_correct numNot by
-  loom_goals_intro
-  loom_unfold
-  all_goals simp_all [Pure.numNot]
+  velvet_vcgen [numNot] with finish [Pure.numNot]
 
 prove_correct numTernary by
-  loom_goals_intro
-  loom_unfold
-  all_goals simp_all [Pure.numTernary]
+  velvet_vcgen [numTernary] with finish [Pure.numTernary]
 
 prove_correct strCond by
-  loom_goals_intro
-  loom_unfold
-  all_goals simp_all [Pure.strCond]
+  velvet_vcgen [strCond] with finish [Pure.strCond]
 
 prove_correct strNot by
-  loom_goals_intro
-  loom_unfold
-  all_goals (simp only [Pure.strNot, ← str_length_eq_zero_iff]; split <;> omega)
+  velvet_vcgen [strNot] with finish [Pure.strNot, String.length_eq_zero_iff]
 
 prove_correct arrCond by
-  loom_goals_intro
-  loom_unfold
-  all_goals simp_all [Pure.arrCond]
+  velvet_vcgen [arrCond] with finish [Pure.arrCond]
 
 prove_correct arrNot by
-  loom_goals_intro
-  loom_unfold
-  all_goals simp_all [Pure.arrNot]
+  velvet_vcgen [arrNot] with finish [Pure.arrNot]
 
--- The optional cases also need an explicit split on `o` so the `match o` in each
--- postcondition reduces; then simp closes each arm.
+-- `finish` also splits the optional values to reduce their postconditions.
 prove_correct optNumCond by
-  loom_goals_intro
-  loom_unfold
-  all_goals (cases o <;> simp_all [Pure.optNumCond])
+  velvet_vcgen [optNumCond] with finish [Pure.optNumCond]
 
 prove_correct optNumNot by
-  loom_goals_intro
-  loom_unfold
-  all_goals (cases o <;> simp_all [Pure.optNumNot])
+  velvet_vcgen [optNumNot] with finish [Pure.optNumNot]
 
 prove_correct optStrCond by
-  loom_goals_intro
-  loom_unfold
-  all_goals (cases o <;> simp_all [Pure.optStrCond, str_length_eq_zero_iff])
+  velvet_vcgen [optStrCond] with finish [Pure.optStrCond, String.length_eq_zero_iff]
 
 prove_correct optPresent by
-  loom_goals_intro
-  loom_unfold
-  all_goals (cases o <;> simp_all [Pure.optPresent])
+  velvet_vcgen [optPresent] with finish [Pure.optPresent]

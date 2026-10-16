@@ -2,6 +2,10 @@
 set -euo pipefail
 cd "$(dirname "$0")/.."
 
+# Fixture runs use temp dirs outside any git repo, so the run log would land in
+# the current directory. Keep it off; the run-log section turns it on locally.
+export LSC_RUN_LOG=false
+
 # Run executable tests before the Dafny fixture checks.
 npm test
 
@@ -279,3 +283,60 @@ if grep -Fq '// lsc options:' "$fixture_dir/legacy-safe-slice.dfy.gen"; then
   echo "ERROR: unicode-scalar stamped an options header"
   exit 1
 fi
+
+# Run log: a real check → broken proof → fixed proof sequence is recorded with
+# member outcomes and hashes, inside a self-ignoring .lemmascript/ beside the config.
+run_log_dir="$fixture_dir/run-log-project"
+mkdir -p "$run_log_dir"
+echo '{}' > "$run_log_dir/lemmascript.json"
+cp examples/arraySum.ts examples/arraySum.dfy "$run_log_dir/"
+LSC_RUN_LOG=true npx tsx tools/src/lsc.ts check --backend=dafny "$run_log_dir/arraySum.ts"
+cp "$run_log_dir/arraySum.dfy" "$run_log_dir/arraySum.dfy.good"
+# Break the proof with an addition (a false invariant on its own line), so the
+# additions-only check passes and Dafny itself rejects it.
+awk '{ print } /invariant \(sum == sumTo\(arr, i\)\)/ { print "    invariant sum == 0" }' \
+  "$run_log_dir/arraySum.dfy.good" > "$run_log_dir/arraySum.dfy"
+expect_failure \
+  "run log fixture: a false added invariant verified" \
+  env LSC_RUN_LOG=true npx tsx tools/src/lsc.ts check --backend=dafny "$run_log_dir/arraySum.ts"
+mv "$run_log_dir/arraySum.dfy.good" "$run_log_dir/arraySum.dfy"
+LSC_RUN_LOG=true npx tsx tools/src/lsc.ts check --backend=dafny "$run_log_dir/arraySum.ts"
+node -e '
+const runs = require("fs").readFileSync(process.argv[1], "utf8").trim().split("\n").map(l => JSON.parse(l));
+const fail = msg => { console.error("ERROR: run log fixture: " + msg); process.exit(1); };
+const stages = runs.map(r => r.stage).join(",");
+if (stages !== "ok,verify,ok") fail("stages were " + stages);
+if (!runs[1].failed.includes("arraySum")) fail("arraySum was not recorded as failing");
+if (!runs[2].passed.includes("arraySum")) fail("arraySum was not recorded as passing again");
+if (new Set(runs.map(r => r.tsHash)).size !== 1) fail("the .ts hash changed although the .ts did not");
+if (runs[1].dfyHash === runs[0].dfyHash || runs[2].dfyHash !== runs[0].dfyHash) fail("dfy hashes did not track the proof edit");
+' "$run_log_dir/.lemmascript/runs.jsonl"
+grep -qx '\*' "$run_log_dir/.lemmascript/.gitignore"
+expect_absent .lemmascript
+
+# lsc runs: a code bug in the .ts fails under regen and its removal passes, so
+# the log above now holds a proof catch (the proof edit) and a source-fix catch
+# whose diff changed only code.
+cp "$run_log_dir/arraySum.ts" "$run_log_dir/arraySum.ts.good"
+sed 's/sum = sum + arr\[i\];/sum = sum + arr[i] + 1;/' "$run_log_dir/arraySum.ts.good" > "$run_log_dir/arraySum.ts"
+expect_failure \
+  "run log fixture: arraySum with an off-by-one sum verified" \
+  env LSC_RUN_LOG=true npx tsx tools/src/lsc.ts regen --backend=dafny "$run_log_dir/arraySum.ts"
+mv "$run_log_dir/arraySum.ts.good" "$run_log_dir/arraySum.ts"
+LSC_RUN_LOG=true npx tsx tools/src/lsc.ts regen --backend=dafny "$run_log_dir/arraySum.ts"
+npx tsx tools/src/lsc.ts runs --json --config="$run_log_dir/lemmascript.json" | node -e '
+const report = JSON.parse(require("fs").readFileSync(0, "utf8"));
+const fail = msg => { console.error("ERROR: lsc runs fixture: " + msg); process.exit(1); };
+const caught = report.catches.map(c => `${c.function} ${c.kind} ${c.evidence?.hint ?? "-"}`).join(", ");
+if (caught !== "arraySum proof -, arraySum source-fix code") fail("catches were " + caught);
+if (report.open.length + report.dropped.length !== 0) fail("expected no open or dropped failures");
+'
+
+# "run-log": false in lemmascript.json keeps logging off; LSC_RUN_LOG=true leaves
+# the decision to the config rather than overriding it.
+run_log_off_dir="$fixture_dir/run-log-off-project"
+mkdir -p "$run_log_off_dir"
+echo '{ "run-log": false }' > "$run_log_off_dir/lemmascript.json"
+cp examples/arraySum.ts examples/arraySum.dfy "$run_log_off_dir/"
+LSC_RUN_LOG=true npx tsx tools/src/lsc.ts check --backend=dafny "$run_log_off_dir/arraySum.ts"
+expect_absent "$run_log_off_dir/.lemmascript"

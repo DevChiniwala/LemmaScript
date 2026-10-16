@@ -6,8 +6,15 @@ import { proofCheckDiff, proofRegen } from "./proof-files.js";
 export { proofGen as dafnyGen } from "./proof-files.js";
 import path from "path";
 import { DEFAULT_OPTIONS, parseOptionValue, type LscOptions } from "./config.js";
+import type { RunLog } from "./run-log.js";
 
-export function dafnyCheckDiff(genPath: string, dfyPath: string): boolean {
+export function dafnyCheckDiff(genPath: string, dfyPath: string, log?: RunLog): boolean {
+  const ok = additionsOnly(genPath, dfyPath);
+  if (!ok) log?.finish({ stage: "diff", exit: 1, dfyPath });
+  return ok;
+}
+
+function additionsOnly(genPath: string, dfyPath: string): boolean {
   if (!proofCheckDiff(genPath, dfyPath)) return false;
 
   // Proof additions must retain the model chosen by the generated companion.
@@ -78,22 +85,40 @@ export function dafnyVerifyArgs(content: string, timeLimit?: number, extraFlags?
   return { args };
 }
 
-export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string): boolean {
+export function dafnyVerify(dfyPath: string, dir: string, timeLimit?: number, extraFlags?: string, log?: RunLog): boolean {
   console.log("Running dafny verify...");
   try {
     const { args, error } = dafnyVerifyArgs(readFileSync(dfyPath, "utf-8"), timeLimit, extraFlags);
-    if (error) { console.error(error); return false; }
+    if (error) {
+      console.error(error);
+      log?.finish({ stage: "resolve", exit: 1, dfyPath });
+      return false;
+    }
+    if (log) args.push(...log.dafnyArgs());
     args.push(dfyPath);
     execFileSync("dafny", args, { cwd: dir, stdio: "inherit" });
+    log?.finish({ stage: "ok", exit: 0, dfyPath, results: log.readResults() });
     return true;
   } catch (e: any) {
     if (e?.code === "ENOENT") {
       console.error("ERROR: `dafny` not found on PATH — verification never ran. Install Dafny 4.x: https://dafny.org/");
+      log?.discard();
+      return false;
     }
+    // Dafny writes no results when it stops at parsing or resolution.
+    const results = log?.readResults() ?? null;
+    log?.finish({ stage: results ? "verify" : "resolve", exit: 1, dfyPath, results });
     return false;
   }
 }
 
-export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string, timeLimit?: number, extraFlags?: string, noVerify = false) {
-  proofRegen(genPath, dfyPath, basePath, text, () => dafnyVerify(dfyPath, dir, timeLimit, extraFlags), noVerify, dafnyCheckDiff);
+export function dafnyRegen(genPath: string, dfyPath: string, basePath: string, text: string, dir: string, timeLimit?: number, extraFlags?: string, noVerify = false, log?: RunLog) {
+  proofRegen(
+    genPath, dfyPath, basePath, text,
+    () => dafnyVerify(dfyPath, dir, timeLimit, extraFlags, log), noVerify,
+    (gen, proof) => dafnyCheckDiff(gen, proof, log),
+    () => log?.finish({ stage: "conflict", exit: 1, dfyPath }),
+  );
+  // Verification already recorded its outcome; this also covers --no-verify.
+  log?.finish({ stage: "ok", exit: 0, dfyPath });
 }

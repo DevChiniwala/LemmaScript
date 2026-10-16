@@ -1,14 +1,11 @@
 import «majority.def»
 import «majority.spec»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct occOf by
-  loom_solve
+  velvet_vcgen [occOf] with finish
 
 prove_correct majority by
-  loom_goals_intro
-  loom_unfold
-  all_goals (try simp only [loomAbstractionSimp] at *)
-  all_goals grind (splits := 20)
+  velvet_vcgen [majority] simplifying_assumptions [occOf_zero, occOf_step]
+    with finish (splits := 20)

@@ -28,7 +28,7 @@ Each artifact lives in exactly one place; every copy is machine-maintained and o
 Deliberate properties of the tarball:
 
 - **No source, no build script.** The readable source lives in the skills layer (§2). What ships is the execution artifact only; converting a source edit into changed behavior would require deliberately routing around the packaging, which no packaging choice prevents and which CI's fresh install erases anyway.
-- **Dafny-first, unchanged from v1:** the Lean workspace (velvet/loom sibling checkouts, mathlib, solver downloads) cannot resolve outside a source checkout. `lsc gen --backend=lean` keeps working exactly as far as it naturally does — no gating code. Lean verification's distribution channel is the source kit.
+- **Dafny-first:** the npm package supplies the generator; Lean verification additionally needs the source Lean library, the sibling Velvet 2 checkout on `lemma2`, and Lake dependencies including Mathlib. `lsc gen --backend=lean` remains available from npm. Lean verification's distribution channel is the source kit; the current backend needs neither Loom nor external solver downloads.
 
 ## 2. The skills repo: the agent layer
 
@@ -147,7 +147,7 @@ Mechanics and accepted consequences:
 
 ## 5. The kit
 
-The kit keeps its submodule setup and remains the **Lean channel** (source checkout + velvet/loom siblings). Its skills submodule now also delivers `reference/`, so the kit's caveat about substituting tsx incantations can shrink: reading source no longer requires knowing the checkout layout — the skill's relative paths work identically in the kit and in npm-consuming projects. The release-sync workflow bumps the kit's submodules to tip on every release, so the kit tracks releases with no manual pointer maintenance.
+The kit keeps its submodule setup and remains the **Lean channel** (source checkout + sibling Velvet 2 checkout on `lemma2`). Its skills submodule now also delivers `reference/`, so the kit's caveat about substituting tsx incantations can shrink: reading source no longer requires knowing the checkout layout — the skill's relative paths work identically in the kit and in npm-consuming projects. The release-sync workflow bumps the kit's submodules to tip on every release, so the kit tracks releases with no manual pointer maintenance.
 
 ## Trust story
 

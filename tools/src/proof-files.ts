@@ -66,7 +66,7 @@ export function proofCheckDiff(genPath: string, proofPath: string): boolean {
   return true;
 }
 
-export function proofRegen(genPath: string, proofPath: string, basePath: string, text: string, verify: () => boolean, noVerify = false, checkDiff = proofCheckDiff) {
+export function proofRegen(genPath: string, proofPath: string, basePath: string, text: string, verify: () => boolean, noVerify = false, checkDiff = proofCheckDiff, onConflict?: () => void) {
   // 1. Read old gen before overwriting (needed for base seeding)
   const oldGen = existsSync(genPath) ? readFileSync(genPath, "utf-8") : "";
 
@@ -101,6 +101,7 @@ export function proofRegen(genPath: string, proofPath: string, basePath: string,
         copyFileSync(proofPath, mergedPath);
         writeFileSync(proofPath, savedProof);
         console.error(`CONFLICT: ${path.basename(proofPath)} — merge had conflicts, proof restored. See ${path.basename(mergedPath)}`);
+        onConflict?.();
         process.exit(1);
       }
       throw e;

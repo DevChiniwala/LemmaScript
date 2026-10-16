@@ -45,6 +45,12 @@ export const OPTION_SPECS = {
     fileOverride: true,
     description: "Use Dafny's standard library or generated local helpers for collection operations.",
   },
+  "run-log": {
+    type: "boolean",
+    default: true,
+    fileOverride: false,
+    description: "Record lsc check and regen runs in .lemmascript/.",
+  },
 } as const;
 
 type OptionSpecs = typeof OPTION_SPECS;

@@ -47,9 +47,9 @@ Verus demonstrates that verification annotations can coexist with production cod
 
 LemmaScript supports two verification backends:
 
-**Dafny** is the primary backend. It is currently easier for LLMs to verify programs in Dafny than in Lean/Loom/Velvet. This is true, despite a mismatch in tooling where Dafny has a generated stub that needs to be completed to a full verified program. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
+**Dafny** is the primary backend. It is currently easier for LLMs to verify programs in Dafny than in Lean/Velvet 2. This is true, despite a mismatch in tooling where Dafny has a generated stub that needs to be completed to a full verified program. See [SPEC_DAFNY.md](SPEC_DAFNY.md).
 
-**Lean** (via Velvet/Loom) is the secondary backend. It is more powerful for inductive proofs and offers a richer proof language, but automation is harder for LLMs. See [SPEC_LEAN.md](SPEC_LEAN.md).
+**Lean** (via Velvet 2) is the secondary backend. It is more powerful for inductive proofs and offers a richer proof language, but automation is harder for LLMs. See [SPEC_LEAN.md](SPEC_LEAN.md).
 
 Both backends share the same TypeScript source, `//@ ` annotations, and pipeline (extract → resolve → transform). They differ mainly in the emitter and the proof workflow, with some backend-specific steps in transform and peephole.
 
@@ -116,7 +116,7 @@ For each verified function:
 
 Regenerating `.dfy.gen` triggers a three-way merge to preserve user additions in `.dfy`.
 
-**Pure defs are total.** `//@ requires` annotations are emitted on Velvet methods (as `require` clauses) but dropped from Lean `Pure` namespace defs. Pure defs must be total Lean functions — they accept any input, including invalid ones. This is because Pure defs are called from runtime-check functions (e.g., `validExpense` calls `sumTo` to *test* whether shares sum to the amount, before knowing that they do). Dafny handles this differently: its verifier tracks path conditions through if-branches, so a function guarded by a runtime check can satisfy a callee's `requires`.
+**Pure defs are total.** `//@ requires` annotations are emitted on Velvet methods (as `requires` clauses) but dropped from Lean `Pure` namespace defs. Pure defs must be total Lean functions — they accept any input, including invalid ones. This is because Pure defs are called from runtime-check functions (e.g., `validExpense` calls `sumTo` to *test* whether shares sum to the amount, before knowing that they do). Dafny handles this differently: its verifier tracks path conditions through if-branches, so a function guarded by a runtime check can satisfy a callee's `requires`.
 
 ---
 
@@ -183,31 +183,32 @@ Developers adopt incrementally: start with contracts, then add `//@ ` annotation
 
 ---
 
-## 8. Building on Loom and Velvet (Lean backend)
+## 8. Building on Velvet 2 (Lean backend)
 
-### What Loom provides
+### The Lean foundation
 
-- Monadic shallow embedding of imperative programs into Lean 4
-- Weakest precondition generation via monad transformer algebras
-- SMT solver integration (Z3, cvc5) for automated VC discharge
-- Support for partial and total correctness
-- Lean's full proof automation (grind, aesop, omega, etc.)
-- Machine-checked soundness of the VC generator
+Velvet 2 builds on Lean's `Std.Internal.Do` framework for weakest preconditions
+and Hoare triples, and uses symbolic simplification and grind for VC generation
+and discharging. LemmaScript pins its Lean version in `lean-toolchain` and
+imports supporting Mathlib tactics and lemmas. The current backend does not
+require Loom or external SMT solver binaries.
 
 ### What Velvet provides
 
-LemmaScript currently generates Velvet `method` declarations rather than raw Loom programs. Velvet provides:
-- `method` / `require` / `ensures` / `invariant` / `done_with` / `decreasing` / `break` syntax
+LemmaScript generates Velvet 2 `method` declarations. Velvet provides:
+- `method ... returns (...)` / `requires` / `ensures` / `invariant` / `done_with` / `decreasing` / `break` syntax
 - `prove_correct` command that generates Hoare triple obligations
-- `loom_solve` tactic for automated VC discharge
+- `velvet_vcgen [methodName] with finish` for VC generation and shared solving
 
-We use a fork of Velvet with one change: obligations persist across files, so `prove_correct` can live in `.proof.lean` while `method` lives in `.def.lean`.
+Use the `lemma2` branch of the `namin/velvet` fork as the sibling `../velvet`
+checkout; see [setup](README.md#setup). Its persistent method specifications
+allow `prove_correct` to live in `.proof.lean` while `method` lives in `.def.lean`.
 
 Long term, we may replace Velvet with LemmaScript-native Lean macros for: exact control over proof state, TS-specific constructs, error messages referencing TS source, and independent evolution.
 
 ### Relationship to Velvet
 
-Velvet targets Lean developers writing Dafny-style verified programs. LemmaScript targets TypeScript developers who never see Lean. They share the Loom substrate but serve different communities.
+Velvet targets Lean developers writing Dafny-style verified programs. LemmaScript targets TypeScript developers and generates the Velvet layer from annotated TS. Hand-written Lean specifications and proofs remain available when automation needs help.
 
 ---
 
@@ -232,8 +233,8 @@ The LLM can help with proof tactics and ghost definitions. It cannot help with m
 | **Frama-C / ACSL** | Closest architectural precedent. ACSL puts specs in C comments; Frama-C verifies them. LemmaScript's `//@ ` annotations follow this model. |
 | **JML** | External specification for Java. Similar separation of code and specs. |
 | **Dafny** | One of LemmaScript's verification backends. Also the model for Velvet's design. |
-| **Velvet** | Sibling project on Loom. LemmaScript currently generates Velvet syntax for the Lean backend. |
-| **Loom** | The foundational framework for the Lean backend. LemmaScript is a Loom client. |
+| **Velvet 2** | LemmaScript generates its method syntax and uses its VC generator on top of Lean's `Std.Internal.Do` framework. |
+| **Loom** | Framework used by the previous Velvet backend; the current Velvet 2 backend has no Loom dependency. |
 | **RSC** | Prior art for TS verification. LemmaScript uses explicit annotations on a restricted fragment with full proving power, rather than refinement type inference. |
 | **runtime guard** | The enforcement layer between verified and unverified TypeScript. |
 | **lean-lsp-mcp** | The bridge between LLMs and Lean's proof engine. |

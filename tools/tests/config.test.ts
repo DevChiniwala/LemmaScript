@@ -145,10 +145,11 @@ for (const [directive, message] of [
   ["option", "expected //@ option <key> <value>"],
   ["option safe-slice", "expected //@ option <key> <value>"],
   ["option safe-slice true extra", "expected //@ option <key> <value>"],
-  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir, string-semantics, dafny-library)"],
+  ["option missing true", "unknown option 'missing' (known options: extern-default, safe-slice, proof-dir, string-semantics, dafny-library, run-log)"],
   ["option safe-slice yes", "option 'safe-slice' must be true or false"],
   ["option extern-default invalid", "option 'extern-default' must be one of: pure, impure"],
   ["option proof-dir proofs", "option 'proof-dir' is config-only"],
+  ["option run-log false", "option 'run-log' is config-only"],
 ]) {
   test(`still rejects invalid directive: ${directive}`, () => {
     assert.throws(
@@ -230,3 +231,9 @@ for (const [key, value] of [["string-semantics", "javascript-utf16"], ["dafny-li
     assert.throws(() => parseFileOptions("const value = 1;\n" + directive, "example.ts"), /before the first source statement/);
   });
 }
+
+test("run-log defaults on and can be turned off in lemmascript.json", () => {
+  assert.equal(resolveOptions({}, "lemmascript.json")["run-log"], true);
+  const options = resolveOptions(validateOptions({ "run-log": false }, "lemmascript.json"), "lemmascript.json");
+  assert.equal(options["run-log"], false);
+});

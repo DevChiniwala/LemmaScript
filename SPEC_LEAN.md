@@ -1,6 +1,6 @@
 # LemmaScript — Lean Backend Specification
 
-This document covers what is unique to the Lean backend. See [SPEC.md](SPEC.md) for the shared annotation language, translation rules, type mapping, and pipeline.
+This document covers the Lean backend using Velvet 2 from the `lemma2` branch of `namin/velvet`. See [README.md](README.md#setup) for setup, and [SPEC.md](SPEC.md) for the shared annotation language, translation rules, type mapping, and pipeline.
 
 ---
 
@@ -18,7 +18,7 @@ my-app/
     binarySearch.proof.lean      ← prove_correct + tactics (user/LLM-written)
   lakefile.lean                  ← requires LemmaScript
   lean-toolchain
-  package.json                   ← depends on @lemmascript/tools
+  package.json                   ← depends on lemmascript
 ```
 
 ### 1.1 The Four Lean Files
@@ -58,7 +58,7 @@ import «binarySearch.def»
 
 All files live in `src/`, which Lake is configured to scan. No nested `lean/` directory.
 
-To set up a new project, copy `lakefile.lean`, `lean-toolchain`, and `dependencies.toml` from an existing case study.
+To set up a new project, adapt `lakefile.lean` from a Velvet 2 case study to your source directories and module roots, and use the same `lean-toolchain` as LemmaScript (currently Lean 4.34.0). Keep LemmaScript and Velvet as sibling checkouts, with Velvet on **`lemma2`**. The older `lemma` branch is incompatible with this setup. The current Lake configuration does not use the legacy solver-version file `dependencies.toml`.
 
 ### 1.4 Overriding the Module Base — `//@ lean-module`
 
@@ -83,13 +83,13 @@ x ← f a b          -- mutation: rebinds existing variable
 let x ← f a b      -- new binding
 ```
 
-This follows Lean's do-notation desugaring rules (Ullrich & de Moura, "'do' Unchained", 2022). The `←` is not just syntax — it carries monadic semantics that Velvet's WPGen reasons about.
+This follows Lean's do-notation desugaring rules (Ullrich & de Moura, "'do' Unchained", 2022). The `←` carries monadic semantics that Velvet's VC generator reasons about through Lean's `Std.Internal.Do` framework.
 
 **Monadic HOF variants:** When a lambda callback passed to a HOF calls a method, the transform selects the monadic variant of the HOF (e.g., `arr.mapM f` instead of `arr.map f`). The monadic HOF call is itself monadic — it gets `←` at the call site. The transform checks the transformed lambda body for `←` binds and selects the variant automatically.
 
 **Short-circuit note:** As in Lean's `←`, lifting from `&&`/`||` loses short-circuit semantics (both sides execute). This matches Lean's behavior.
 
-**Proof note:** Velvet's WPGen does not currently have rules for `mapM`/`filterM`/etc. Proofs involving monadic HOFs require manual tactics.
+**Proof note:** [LemmaScript/ArrayM.lean](LemmaScript/ArrayM.lean) provides `@[spec]` rules for `mapM`, `filterM`, `allM`, and `anyM` with `Option` callbacks. These establish successful execution when each callback succeeds; the `mapM` rule also preserves array size. Stronger properties about the resulting elements may require additional lemmas.
 
 ---
 
@@ -97,7 +97,7 @@ This follows Lean's do-notation desugaring rules (Ullrich & de Moura, "'do' Unch
 
 For `src/foo.ts`, `lsc gen` produces `src/foo.types.lean` and `src/foo.def.lean`.
 
-`foo.types.lean` contains Lean type definitions derived from TS `type` declarations (string literal unions, discriminated unions, records). If the TS file has no user-defined types, this file is not generated.
+`foo.types.lean` contains Lean type definitions derived from TS `type` declarations (string literal unions, discriminated unions, records), along with any pure mirrors or opaque extern declarations (§3.1). It is omitted when none of these declarations are needed.
 
 `foo.def.lean` contains the Velvet `method` definition:
 
@@ -108,11 +108,10 @@ For `src/foo.ts`, `lsc gen` produces `src/foo.types.lean` and `src/foo.def.lean`
 -/
 import «foo.spec»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-method foo (params...) return (res : RetType)
-  require ...
+method foo (params...) returns (res : RetType)
+  requires ...
   ensures ...
   do
     ...
@@ -139,35 +138,36 @@ This enables proofs by standard Lean induction over sequences of calls. The Velv
 
 Deterministic extern declarations become opaque Lean functions. Impure externs are Dafny-only and are rejected by the Lean backend, whether selected explicitly with `//@ impure` or inherited from `extern-default: impure`; add `//@ pure` to an individual extern used by a Lean file.
 
-**Proof note:** Since the method body is `return Pure.foo ...`, proofs need `unfold Pure.foo` before `loom_solve` to expose the logic.
+**Proof note:** Since the method body is `return Pure.foo ...`, supply its pure mirror to the discharger: `velvet_vcgen [foo] with finish [Pure.foo]`.
 
 ---
 
 ## 4. User-Written `.proof.lean` File
 
 ```lean
-import «binarySearch.def»
+import «clamp.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
-prove_correct binarySearch by
-  loom_solve
+prove_correct clamp by
+  velvet_vcgen [clamp] with finish
 ```
 
-This is the simplest proof — delegate everything to `loom_solve`. When `loom_solve` fails:
+Velvet 2 generates VCs and discharges them in one shared solver state. When some goals need interactive proofs:
 
-1. `lsc check` reports unsolved goals.
+1. `lsc check --backend=lean path/to/foo.ts` reports unsolved goals.
 2. The user (or LLM) edits `.proof.lean` to add fallback tactics:
 
 ```lean
 prove_correct binarySearch by
-  loom_solve!
+  velvet_vcgen [binarySearch] with (expose_names; try finish)
   · -- handle remaining goal
     grind
 ```
 
-3. Or the user adds helper lemmas to `.spec.lean` that `loom_solve` can use.
+3. Or the user adds helper lemmas to `.spec.lean` and supplies them to `finish` or to `simplifying_assumptions [helper_zero, helper_step]` before `with` to simplify hypotheses during VC generation.
+
+Keep common processing inside `velvet_vcgen`, including `expose_names`, instead of following it with `all_goals` passes. The `with` clause takes grind-mode tactics; `tactic => ...` embeds a complete ordinary tactic proof when needed. Goal-specific residual proofs can remain afterward.
 
 **Invariants** are part of the method definition (in the `//@ ` annotations), not the proof. If an invariant is missing, the user adds `//@ invariant` to the TS file and regenerates `.def.lean`.
 
@@ -181,20 +181,19 @@ Properties about functions can be proved as standalone Hoare triples in `.proof.
 ```lean
 -- The function has no ensures — just loop invariants
 prove_correct runSession by
-  loom_solve
+  velvet_vcgen [runSession] with finish
 
 -- Property proved separately as a Hoare triple
-open TotalCorrectness DemonicChoice in
+open Std.Internal.Do in
 theorem runSession_timeout_resets (events : Array Event)
     (h1 : events.size > 0) (h2 : lastEvent events = .timeout) :
-    triple (events.size > 0 ∧ lastEvent events = .timeout)
-           (runSession events)
-           (fun res => res = State.idle) := by
-  unfold runSession
-  loom_solve
+    Triple (runSession events)
+           (events.size > 0 ∧ lastEvent events = .timeout)
+           (fun res => res = State.idle) False := by
+  velvet_vcgen [runSession] with finish
 ```
 
-The pattern: `unfold` the method to expose the body, then `loom_solve` to discharge the VCs.
+Supply the method in the `velvet_vcgen` argument list and discharge its VCs with `with finish`.
 
 ---
 
@@ -202,23 +201,23 @@ The pattern: `unfold` the method to expose the body, then `loom_solve` to discha
 
 The LemmaScript Lean library provides:
 
-1. **Re-exports of Velvet (forked) and Loom.** Users import `LemmaScript` and get everything.
-2. **Velvet fork:** One change from upstream — obligations are persisted across files so `prove_correct` works in a separate file from `method`.
-3. **WPGen rules and simp lemmas** for Option (`WPGenOption.lean`: dependent if-then-else / `dite`) and HashSet (`WPGenHashSet.lean`: insert size bounds, `strip_withname` tactic).
+1. **Velvet 2 and supporting Mathlib imports.** User artifacts import `LemmaScript` to access the method syntax, VC generator, and proof support.
+2. **Cross-file method specifications.** The Velvet fork persists method specifications so `prove_correct` works in a separate file from `method`.
+3. **Operation specifications and helper lemmas** in [ArrayM.lean](LemmaScript/ArrayM.lean), [HashSet.lean](LemmaScript/HashSet.lean), and [Range.lean](LemmaScript/Range.lean): monadic array specifications, hash-set size and array membership lemmas, and a range-to-list bridge.
 
 The library depends on:
-- Velvet (forked, which depends on Loom, which depends on mathlib)
-- Z3 and cvc5 (downloaded by the lakefile)
+- Velvet 2 from the sibling `../velvet` checkout on `lemma2`.
+- Mathlib, pinned in [lakefile.lean](lakefile.lean) to match [lean-toolchain](lean-toolchain).
 
-Pre-built oleans are distributed so user projects skip compilation.
+Lake builds the Lean dependencies. VC generation uses Lean's `Std.Internal.Do` and grind infrastructure; Loom and external Z3/cvc5 binaries are not dependencies of this backend.
 
-**Future: replacing Velvet with LemmaScript-native macros.** The Velvet fork is pragmatic for Phase 1. Long term, building our own Lean macros on Loom directly would give us: exact control over the generated proof state (no `WithName` surprises), TS-specific constructs without waiting on Velvet, error messages that reference TS source instead of Velvet internals, and independent evolution from Velvet's Dafny-oriented design.
+**Future: LemmaScript-native macros.** A future interface could build directly on Lean's `Std.Internal.Do` framework to support TS-specific constructs and diagnostics. The current backend generates Velvet 2 methods and uses `velvet_vcgen`.
 
 ---
 
-## 6. Findings from Phase 0
+## 6. Lean Verification Notes
 
-Empirical constraints discovered during prototyping. They inform the design but should be re-validated.
+Practical constraints for the current Velvet 2 backend.
 
 ### 6.1 Int vs Nat
 
@@ -231,22 +230,22 @@ Empirical constraints discovered during prototyping. They inform the design but 
 - Recursive ghost functions on array indices should take `Nat`. Calling code should use `//@ type` for the index variable.
 - Bridge lemmas (e.g., `(i + 1).toNat = i.toNat + 1`) may be needed in `.spec.lean` when mixing Int and Nat.
 
-### 6.2 `loom_solve` Capabilities
+### 6.2 VC Generation and Discharging
 
-- Discharges most VCs for array algorithms automatically.
-- Handles all comparison directions (`≥`, `>`, `≤`, `<`).
-- Needs ghost functions tagged `@[grind, loomAbstractionSimp]`.
-- Recursive ghost functions may need explicit step lemmas with the same attributes.
-- Cannot invent loop invariants. Missing or weak invariants produce unsolved goals.
-- Cannot bridge `(i + 1).toNat` to `i.toNat + 1` without a lemma.
+- Start with `velvet_vcgen [methodName] with finish`; add pure mirrors or helper lemmas to `finish [...]` as needed.
+- Supply recursive helpers' zero/step rewrite lemmas through `simplifying_assumptions [...]` when assumptions need simplification.
+- Keep common name exposure and solving inside `with` to reuse the VC generator's shared solver state.
+- Use `tactic => ...` for a complete ordinary tactic proof, or `try finish` to leave goal-specific residual proofs afterward.
+- The solver cannot invent loop invariants. Missing or weak invariants produce unsolved goals.
+- Mixed `Int`/`Nat` arithmetic may need explicit bounds, bridge lemmas, or `omega`.
 
 ### 6.3 Velvet Specifics
 
-- `method` syntax handles `require`, `ensures`, `invariant`, `done_with`, `decreasing`, `break`, mutable variables.
-- `return` not supported inside loops — users restructure to `break` + result variable.
+- Velvet 2 uses `method ... returns (...)`, `requires`, and `ensures`; loops support `invariant`, `done_with`, `decreasing`, `break`, and mutable variables.
+- LemmaScript lowers supported returns inside outer loops to `break` plus a result variable. Loops with `break`, including lowered returns, require an explicit `//@ done_with` annotation; see [SPEC.md §4.3](SPEC.md#43-return-inside-loops).
 - `done_with` captures what is true when the loop exits (by condition or by break).
 - `prove_correct` works across files (with our fork's persistence fix).
-- `loom_solve!` shows unsolved goals for debugging.
+- `velvet_vcgen [methodName] with (expose_names; try finish)` exposes names and leaves unsolved goals for interactive proof.
 
 ### 6.4 Decreasing Clauses
 

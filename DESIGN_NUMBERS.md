@@ -289,27 +289,28 @@ verification unsoundness, identity mismatch, or solver inability is.
 
 ### Lean research snapshot
 
-The repository pins Lean 4.24, where `Float` is opaque to useful logical
-reasoning. Lean merged [`Float.Model`](https://github.com/leanprover/lean4/pull/14079)
+The original research snapshot used Lean 4.24, where `Float` was opaque to useful
+logical reasoning. Lean merged [`Float.Model`](https://github.com/leanprover/lean4/pull/14079)
 and connected `Float` to it in a follow-up in June 2026, but that work is newer
-than the pinned toolchain. The [current development
+than that earlier toolchain. The [development
 manual](https://lean-lang.org/doc/reference/latest/Basic-Types/Floating-Point-Numbers/)
 describes a canonical-NaN `UInt64` model with logical definitions for a core set
 of operations, while warning that it is not a general floating-point theorem
 library and that some operations remain opaque.
 
-The Lean spike must use a nightly or future stable release in an isolated branch
-and answer:
+The Velvet 2 checkout now pins Lean 4.34.0 in `lean-toolchain`. Revalidate this
+research against that pinned version in an isolated branch; this proposal has
+not yet established floating-point proof support there. The Lean spike must answer:
 
 1. Which source operations reduce in the kernel and which remain opaque.
-2. Whether Velvet's generated VCs and Loom tactics can use the model without
+2. Whether Velvet 2's generated VCs and `finish` can use the model without
    unacceptable proof size or time.
 3. How propositional equality, `BEq`, ordering, and hashed collections line up
    with the three ECMAScript equality relations.
 4. Whether literal construction from exact bits is available and convenient.
 5. Which separate floating-point theorem library, if any, is suitable for error
    bounds and how its results transfer to `Float.Model`.
-6. The cost of upgrading Lean, Velvet, Loom, and the checked-in proofs together.
+6. The cost of any further Lean/Velvet upgrades and changes to the checked-in proofs.
 
 Until this passes, `number-semantics: "javascript"` under Lean must be rejected.
 

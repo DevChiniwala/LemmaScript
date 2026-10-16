@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { DEFAULT_OPTIONS, resolveOptions } from "../src/config.ts";
-import { emitDafnyFile } from "../src/dafny-emit.ts";
+import { DAFNY_HELPER_NAMES, declaredNames, emitDafnyFile } from "../src/dafny-emit.ts";
 import type { Decl, Expr, Module } from "../src/ir.ts";
 
 const utf16 = resolveOptions({ "string-semantics": "javascript-utf16", "dafny-library": "local" }, "test");
@@ -88,5 +88,57 @@ for (const inNamespace of [false, true]) {
       : moduleWith(...declarations);
     assert.throws(() => emitDafnyFile(failing, "unsupported.ts", utf16), /Unsupported Dafny method call/);
     assert.equal(emitDafnyFile(numbers, "numbers.ts", utf16), baseline);
+  });
+}
+
+test("the generated helper names include preamble functions, predicates, lemmas and methods", () => {
+  for (const name of [
+    "JSFloorDiv", "JSRem", "SeqFilter", "NormalizeSliceIndex", "SafeSlice", "StringTrim", // functions
+    "SeqSort",                                                                            // function with {:axiom}
+    "IsJSWhitespace",                                                                     // predicate
+    "MaxOfSeqConcat",                                                                     // lemma
+    "SetToSeq",                                                                           // method
+  ]) {
+    assert.ok(DAFNY_HELPER_NAMES.has(name), name);
+  }
+  assert.ok(!DAFNY_HELPER_NAMES.has("splitBill"));
+  assert.ok(!DAFNY_HELPER_NAMES.has("Option"));
+});
+
+test("the generated helper names ignore declaration keywords inside preamble comments", () => {
+  assert.ok(!DAFNY_HELPER_NAMES.has("bodies"));
+});
+
+for (const [text, names] of [
+  ["function F(x: int): int", ["F"]],
+  ["predicate P(x: int)", ["P"]],
+  ["lemma L()", ["L"]],
+  ["method M() returns (r: int)", ["M"]],
+  ["function {:axiom} A(s: seq<int>): seq<int>", ["A"]],
+  ["ghost function G(): int", ["G"]],
+  ["opaque function O(): int", ["O"]],
+  ["ghost predicate GP()", ["GP"]],
+  ["  lemma Indented()", ["Indented"]],
+  ["// this in _ensures lemma bodies when Dafny", []],
+  ["  ensures F(x) == lemma_like", []],
+] as const) {
+  test(`declaredNames finds ${names.length > 0 ? names.join(", ") : "nothing"} in ${JSON.stringify(text)}`, () => {
+    assert.deepEqual(declaredNames(text), names);
+  });
+}
+
+// Two preambles differ by string semantics; the helper names are read from
+// whichever is active, which is only safe while both declare the same names.
+for (const [helper, value] of [
+  ["StringTrim", { kind: "methodCall", obj: { kind: "str", value: " a " }, objTy: { kind: "string" }, method: "trim", args: [], monadic: false }],
+  ["StringFromCharCode", { kind: "app", fn: "StringFromCharCode", args: [{ kind: "num", value: 65 }] }],
+] as const) {
+  test(`${helper} declares the same helper names under both string semantics`, () => {
+    const file = moduleWith({ kind: "const", name: "value", type: { kind: "string" }, value: value as Expr });
+    const scalar = declaredNames(emitDafnyFile(file, "strings.ts")).sort();
+    const units = declaredNames(emitDafnyFile(file, "strings.ts", utf16)).sort();
+    assert.ok(scalar.includes(helper));
+    assert.deepEqual(units, scalar);
+    for (const name of scalar) assert.ok(DAFNY_HELPER_NAMES.has(name), name);
   });
 }

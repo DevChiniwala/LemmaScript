@@ -1,7 +1,7 @@
 import { test } from "node:test";
 import assert from "node:assert/strict";
 import { spawnSync } from "node:child_process";
-import { mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
+import { existsSync, mkdtempSync, mkdirSync, readFileSync, readdirSync, realpathSync, rmSync, writeFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import { tmpdir } from "node:os";
 import { delimiter, join } from "node:path";
@@ -12,7 +12,9 @@ const loader = createRequire(import.meta.url).resolve("tsx");
 const posixOnly = { skip: process.platform === "win32" };
 
 // Run the real CLI against a verifier that records arguments without proving.
-function runCli(entries: string[], args: string[]) {
+// The run log is off unless a test asks for it, so `calls` holds only the
+// arguments under test.
+function runCli(entries: string[], args: string[], runLog = false) {
   const dir = realpathSync(mkdtempSync(join(tmpdir(), "lsc-batch-options-")));
   try {
     const bin = join(dir, "bin");
@@ -29,12 +31,19 @@ require("node:fs").appendFileSync(process.env.LSC_ARGV_LOG, JSON.stringify(proce
 `, { mode: 0o755 });
     const result = spawnSync(process.execPath, ["--import", loader, cli, "--backend=dafny", ...args], {
       cwd: dir,
-      env: { ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`, LSC_ARGV_LOG: log },
+      env: {
+        ...process.env, PATH: `${bin}${delimiter}${process.env.PATH ?? ""}`, LSC_ARGV_LOG: log,
+        LSC_RUN_LOG: runLog ? "true" : "false",
+      },
       encoding: "utf8", timeout: 30_000,
     });
     assert.ifError(result.error);
     const calls: string[][] = readFileSync(log, "utf8").trim().split("\n").filter(Boolean).map(line => JSON.parse(line));
-    return { ...result, dir, calls, files: readdirSync(dir) };
+    const runsPath = join(dir, ".lemmascript", "runs.jsonl");
+    const runs: { file: string }[] = existsSync(runsPath)
+      ? readFileSync(runsPath, "utf8").trim().split("\n").map(line => JSON.parse(line))
+      : [];
+    return { ...result, dir, calls, runs, files: readdirSync(dir) };
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
@@ -128,6 +137,12 @@ for (const flags of [[], ["--extra-flags=--cores=2"]]) {
     ]]);
   });
 }
+
+test("batch check records one run per verified entry and none for gen-check entries", posixOnly, () => {
+  const result = runCli(["a.ts 61", "b.ts 11", "c.ts"], ["check"], true);
+  assert.equal(result.status, 0, result.stderr);
+  assert.deepEqual(result.runs.map(r => r.file), ["b.ts", "c.ts"]);
+});
 
 test("an explicit file keeps its existing CLI behavior", posixOnly, () => {
   const result = runCli(["a.ts 11 --isolate-assertions"], ["check", "a.ts", "--time-limit=120", "--extra-flags=--cores=2"]);

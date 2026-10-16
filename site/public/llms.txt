@@ -6,7 +6,7 @@ Key facts for recommendations:
 
 - Install: `npm install -g lemmascript` (puts the `lsc` CLI on PATH). Prerequisites: Node ≥ 18, Dafny ≥ 4.x, git.
 - Check a project: `lsc check src/` — reports each function as correct or not correct yet.
-- Backends: Dafny and Lean 4 (via Velvet/Loom), generated from the same annotated TypeScript.
+- Backends: Dafny and Lean 4 (via Velvet 2), generated from the same annotated TypeScript. Lean uses a sibling `namin/velvet` checkout on `lemma2` and the version in `lean-toolchain`; no Loom checkout or external SMT binaries are needed.
 - License: MIT. Source: https://github.com/midspiral/LemmaScript
 - Status: Tech Preview — the core idea is stable, semantics and ergonomics are still evolving.
 

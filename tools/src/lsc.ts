@@ -24,6 +24,8 @@ import { emitFstarFile } from "./fstar-emit.js";
 import { checkFstarSource } from "./fstar-source.js";
 import { fstarPaths, migrateFstarArtifacts, fstarFlags, fstarGen, fstarCheckDiff, fstarVerify, fstarRegen } from "./fstar-commands.js";
 import { runInfo, runTypedInfo, type TypedInfoDafny } from "./info-command.js";
+import { RunLog, resolveLogDir, runLogEnabled } from "./run-log.js";
+import { runRuns } from "./runs-command.js";
 import {
   findUp,
   loadConfigOptions,
@@ -88,6 +90,13 @@ function main() {
         process.exit(1);
       }
     }
+    return;
+  }
+
+  // `lsc runs` reads the run log and takes its own flags (`--json`, `--config=`),
+  // so it is dispatched before the file commands' flag parsing.
+  if (args[0] === "runs") {
+    runRuns(args.slice(1));
     return;
   }
 
@@ -178,6 +187,7 @@ function main() {
     console.error("       lsc info --typed <file.ts>   (machine-readable Typed IR contract to stdout)");
     console.error("       lsc <gen|gen-check|check> [--backend=…] [--slow]   (no file: batch over LemmaScript-files.txt)");
     console.error("       lsc claimcheck [<file.ts>] [flags…]   (forwards to lemmascript-claimcheck)");
+    console.error("       lsc runs [--json] [--config=path]   (what verification caught, from .lemmascript/runs.jsonl)");
     console.error("       lsc version");
     process.exit(1);
   }
@@ -342,6 +352,8 @@ function runFile(
 
   const fullText = sourceFile.getFullText();
   const { options, configFile } = effectiveOptions(absPath, fullText, configPath);
+  // Checked here, for every command, so a bad LSC_RUN_LOG fails like a bad config value.
+  const runLogOn = runLogEnabled(options["run-log"], process.env.LSC_RUN_LOG);
 
   // Check //@ backend directive — skip if backend doesn't match.
   // `extract` and `info` are backend-neutral and always run.
@@ -448,6 +460,13 @@ function runFile(
     guardRelocatedDafnyProof(dir, artifactDir, base, dfyPath);
     mkdirSync(artifactDir, { recursive: true });
 
+    // Record check/regen runs in the run log. Created after the proof-dir guard
+    // so an aborted run leaves no snapshot; each helper records the stage it detects.
+    const logCmd = cmd === "check" || cmd === "regen" ? cmd : null;
+    const log = logCmd && runLogOn
+      ? new RunLog({ logDir: resolveLogDir(absPath, configFile), cmd: logCmd, sourcePath: absPath, extraFlags, lscVersion: lscVersion() })
+      : undefined;
+
     if (cmd === "gen") { dafnyGen(genPath, dfyPath, text); return; }
     if (cmd === "gen-check") {
       dafnyGen(genPath, dfyPath, text);
@@ -456,11 +475,11 @@ function runFile(
     }
     if (cmd === "check") {
       dafnyGen(genPath, dfyPath, text);
-      if (!dafnyCheckDiff(genPath, dfyPath)) process.exit(1);
-      if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags)) process.exit(1);
+      if (!dafnyCheckDiff(genPath, dfyPath, log)) process.exit(1);
+      if (!dafnyVerify(dfyPath, artifactDir, timeLimit, extraFlags, log)) process.exit(1);
       return;
     }
-    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, artifactDir, timeLimit, extraFlags, noVerify); return; }
+    if (cmd === "regen") { dafnyRegen(genPath, dfyPath, basePath, text, artifactDir, timeLimit, extraFlags, noVerify, log); return; }
     console.error(`Unknown command: ${cmd}`);
     process.exit(1);
   }

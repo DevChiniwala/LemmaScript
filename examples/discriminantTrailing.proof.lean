@@ -1,7 +1,7 @@
 import «discriminantTrailing.def»
 
-set_option loom.semantics.termination "total"
-set_option loom.semantics.choice "demonic"
+set_option velvet.semantics.termination "total"
 
 prove_correct tally by
-  cases s <;> loom_solve
+  intro s
+  cases s <;> velvet_vcgen [tally] with finish

@@ -25,7 +25,8 @@ node -v          # ≥ 18
 dafny --version  # ≥ 4.x
 ```
 
-For the optional Lean backend you'll also need **Lean 4** (managed via `elan`/`lake`).
+For the optional Lean backend, use the [source workspace](#lean-backend-setup)
+with **Lean 4** (managed via `elan`/`lake`) and **Velvet 2 on `lemma2`**.
 
 ### 2. Install the package
 
@@ -70,6 +71,29 @@ Run the same commands straight out of the source tree (the skills write the CLI 
 ```sh
 npx tsx LemmaScript/tools/src/lsc.ts check --backend=dafny path/to/file.ts
 ```
+
+## Lean backend setup
+
+From the LemmaScript source checkout (`LemmaScript/` inside the kit), install
+[elan](https://github.com/leanprover/elan) and clone Velvet as a sibling:
+
+```sh
+git clone --branch lemma2 https://github.com/namin/velvet.git ../velvet
+lake build
+```
+
+If `../velvet` already exists, select the Velvet 2 branch instead:
+
+```sh
+git -C ../velvet fetch origin
+git -C ../velvet checkout lemma2
+```
+
+Use **`lemma2`**; the older `lemma` branch targets the previous Velvet version.
+The workspace pins Lean in `lean-toolchain` (currently 4.34.0), and Lake manages
+Mathlib and the other Lean dependencies. A Loom checkout and external Z3/cvc5
+binaries are not required. See the [Lean backend specification](/spec-lean/)
+for project configuration and proof files.
 
 ## Next
 

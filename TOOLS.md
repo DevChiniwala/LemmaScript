@@ -132,8 +132,11 @@ TS source (.ts)
 
 ### Commands (`lean-commands.ts`)
 
-- `lsc gen foo.ts` — generate `.types.lean` + `.def.lean`
-- `lsc check foo.ts` — gen + `lake build`
+- `lsc gen --backend=lean foo.ts` — generate `.types.lean` + `.def.lean`
+- `lsc check --backend=lean foo.ts` — gen + `lake build`
+
+The Lean workspace uses Velvet 2 from the sibling `../velvet` checkout on the
+`lemma2` branch and the version in `lean-toolchain`. See [setup](README.md#setup).
 
 ## Dafny Backend
 
@@ -168,6 +171,10 @@ not implement routing themselves.
 - `lsc gen-check --backend=dafny foo.ts` — gen + additions-only check (no `dafny verify`)
 - `lsc regen --backend=dafny foo.ts` — regenerate `.dfy.gen`, three-way merge, verify
 - `lsc check --backend=dafny foo.ts` — gen + additions-only check + `dafny verify`
+
+`check` and `regen` pass an optional `RunLog` (`run-log.ts`) to these helpers, and each records the stage it detects: `dafnyCheckDiff` records `diff`, `dafnyVerify` records `ok`/`verify`/`resolve`, and `dafnyRegen` records `conflict` and `--no-verify` runs. Recording lives in the helpers only because they end runs with `process.exit`; if they ever return outcomes instead, it belongs in `lsc.ts`. Dafny keeps inherited stdio; member outcomes come from `--log-format text` written to a temp file.
+
+`lsc runs` (`runs-command.ts`) reads those records back and derives catches. It relies on names the emitter and extractor own: `DAFNY_HELPER_NAMES` (every function, predicate, lemma and method in the Dafny preambles, which are not counted as user code) and `ENSURES_LEMMA_SUFFIX` from `dafny-emit.ts`, and `AnnotKind` from `extract.ts`, whose every keyword it must classify as spec or proof scaffolding (the typecheck fails otherwise).
 
 ## Narrow Rules
 
@@ -301,4 +308,6 @@ The Dafny emitter wraps `if-then-else` and `let` (var-binding) expressions in pa
 | `dafny-commands.ts` | CLI | Dafny gen/gen-check/regen/check commands |
 | `info-command.ts` | CLI | `lsc info` — per-function spec summary JSON; `--typed` — Typed IR contract for satellites |
 | `config.ts` | CLI/shared | Option registry, config discovery/validation, file overrides, artifact path mapping |
+| `run-log.ts` | CLI | Run log: `.lemmascript/` directory, source snapshots, one record per Dafny `check`/`regen`; reads records back |
+| `runs-command.ts` | CLI | `lsc runs` — catches, open and dropped failures from the run log, with diff evidence and change hints |
 | `lsc.ts` | CLI | Wires the pipeline, dispatches to backend |
