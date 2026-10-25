@@ -21,26 +21,39 @@
  */
 
 import type { TExpr, TStmt, Ty } from "./typedir.js";
-import { freshName } from "./names.js";
+import { freshName, freshNameWhere, isUserName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
 import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
 
-/** Explicit context: type declarations plus the optChain binder counter. */
+/** Explicit context: declarations, optChain counter, and pass-local binders. */
 export interface CondCtx {
   decls: TypeDecls;
   oc: { n: number };
+  binders?: { names: Map<string, string>; used: Set<string> };
+}
+
+/** Allocate within this narrowing pass, retaining a path's name on repeated
+ *  detection. Semantic-only callers need no registry. */
+function freshBinder(ctx: CondCtx, hint: string, key?: string): string {
+  const names = ctx.binders ??= { names: new Map(), used: new Set() };
+  const existing = key === undefined ? undefined : names.names.get(key);
+  if (existing !== undefined) return existing;
+  const binder = freshNameWhere(hint, name => isUserName(name) || names.used.has(name));
+  names.used.add(binder);
+  if (key !== undefined) names.names.set(key, binder);
+  return binder;
 }
 
 export function freshOcBinder(ctx: CondCtx): string {
-  return freshName(`_oc${ctx.oc.n++}_val`);
+  return freshBinder(ctx, `_oc${ctx.oc.n++}_val`);
 }
 
 // ── Presence facts ──────────────────────────────────────────
 
 /** What an optional check establishes: `scrutinee` is present (or absent,
- *  when `negated`), binding `binder : innerTy`. `binder` is the name the
- *  materializers emit verbatim — `binderHintFor`'s base string, already run
- *  through `freshName`. `truthiness` marks the `if (o)` / `!o` / `o ? :`
+ *  when `negated`), binding `binder : innerTy`. `binder` is a
+ *  source-safe hint during detection; materializers freshen it against the
+ *  pass's other binders. `truthiness` marks the `if (o)` / `!o` / `o ? :`
  *  forms, where presence alone isn't enough — a falsy inner value (`Some(0)`,
  *  `Some("")`) must still fail the check. */
 export interface PresentFact {
@@ -51,17 +64,33 @@ export interface PresentFact {
   truthiness: boolean;
 }
 
-/** Pure access paths: var(x) or field(purePath, name). Walks down to the
- *  var root, collecting field names. Returns `_root_field1..._val` (or
- *  `_root_val` for a bare var); null for non-path shapes. */
-export function binderHintFor(e: TExpr): string | null {
+/** Pure access paths: the raw var root followed by its field names;
+ *  null for non-path shapes. */
+function pathParts(e: TExpr): string[] | null {
   const fields: string[] = [];
   let cur = e;
   while (cur.kind === "field") { fields.unshift(cur.field); cur = cur.obj; }
   if (cur.kind !== "var") return null;
+  return [cur.name, ...fields];
+}
+
+export function binderHintFor(e: TExpr): string | null {
+  const parts = pathParts(e);
+  if (!parts) return null;
   // \result is stored as the IR var name "\\result"; sanitize for a valid identifier.
-  const root = cur.name === "\\result" ? "result" : cur.name;
-  return fields.length === 0 ? `_${root}_val` : `_${root}_${fields.join("_")}_val`;
+  const root = parts[0] === "\\result" ? "result" : parts[0];
+  return `_${[root, ...parts.slice(1)].join("_")}_val`;
+}
+
+/** The hint is deliberately readable, not a path identity: `a_b` and `a.b`
+ *  share it. Key the allocation by the complete path instead. */
+export function freshPathBinder(e: TExpr, ctx: CondCtx): string | null {
+  const hint = binderHintFor(e);
+  return hint === null ? null : freshBinder(ctx, hint, JSON.stringify(["path", ...pathParts(e)!]));
+}
+
+export function bindPresentFact(f: PresentFact, ctx: CondCtx): PresentFact {
+  return { ...f, binder: freshPathBinder(f.scrutinee, ctx)! };
 }
 
 /** Detect optional checks: `e !== undefined`, `e === undefined`, `!e`, or a
@@ -175,9 +204,8 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
   if (leaf.kind === "binop" && leaf.op === "!==") {
     const oc = leaf.left.kind === "optChain" ? leaf.left : leaf.right.kind === "optChain" ? leaf.right : null;
     if (oc && oc.kind === "optChain" && oc.obj.ty.kind === "optional") {
-      const hint = binderHintFor(oc.obj);
-      if (hint === null) return null;
-      const binder = freshName(hint);
+      const binder = freshPathBinder(oc.obj, ctx);
+      if (binder === null) return null;
       const unwrapped = applyChain({ kind: "var", name: binder, ty: oc.obj.ty.inner }, oc.chain);
       restoreDiscriminantFlag(unwrapped, ctx.decls);
       const lit = leaf.left === oc ? leaf.right : leaf.left;
@@ -185,8 +213,9 @@ export function noneDetector(leaf: TExpr, ctx: CondCtx): NoneDetector | null {
     }
   }
   // `!x` / `x === undefined`.
-  const f = presentFact(leaf);
-  if (f && f.negated) {
+  const detected = presentFact(leaf);
+  if (detected && detected.negated) {
+    const f = bindPresentFact(detected, ctx);
     const residual: TExpr | null = canBeFalsy(f)
       ? { kind: "unop", op: "!", expr: { kind: "var", name: f.binder, ty: f.innerTy }, ty: { kind: "bool" } }
       : null;
@@ -256,7 +285,7 @@ export function binderHintForMapAccess(m: TExpr, k: TExpr, ctx: CondCtx): string
     // mHint is `_m_val`, kHint is `_k_val` — stitch into `_m_k_val`.
     const mStem = mHint.replace(/_val$/, "");
     const kStem = kHint.replace(/^_/, "").replace(/_val$/, "");
-    return freshName(`${mStem}_${kStem}_val`);
+    return freshBinder(ctx, `${mStem}_${kStem}_val`, JSON.stringify(["map", pathParts(m), pathParts(k)]));
   }
   return freshOcBinder(ctx);
 }
@@ -385,7 +414,8 @@ export function negVariantFact(cond: TExpr, ctx: CondCtx): VariantFact | null {
 /** Reify a presence fact in statement position: the falsy gate (for
  *  truthiness checks over falsy-capable inners) tests the bound value inside
  *  the Some arm, routing falsy inners to `none`. */
-export function presentMatchStmts(f: PresentFact, some: TStmt[], none: TStmt[]): TStmt {
+export function presentMatchStmts(f: PresentFact, some: TStmt[], none: TStmt[], ctx: CondCtx): TStmt {
+  f = bindPresentFact(f, ctx);
   return {
     kind: "someMatch",
     scrutinee: f.scrutinee, binderTy: f.innerTy,
@@ -396,7 +426,8 @@ export function presentMatchStmts(f: PresentFact, some: TStmt[], none: TStmt[]):
 }
 
 /** Reify a presence fact in expression position; same falsy gate. */
-export function presentMatchExpr(f: PresentFact, some: TExpr, none: TExpr, ty: Ty): TExpr {
+export function presentMatchExpr(f: PresentFact, some: TExpr, none: TExpr, ty: Ty, ctx: CondCtx): TExpr {
+  f = bindPresentFact(f, ctx);
   return {
     kind: "someMatch",
     scrutinee: f.scrutinee, binderTy: f.innerTy,
