@@ -593,15 +593,14 @@ function ruleConditionalArrayIsArray(e: TExpr, ctx: CondCtx): TExpr | null {
     : null;
   const matched = pos ?? tof ?? (neg ? { scrutinee: neg.scrutinee, typeName: neg.typeName, variant: "NonArrayBranch" as const } : null);
   if (!matched) return null;
-  const positive = pos ?? tof;
-  const thenBody = positive ? e.then : e.else;
-  const elseBody = positive ? e.else : e.then;
+  // The selected variant already accounts for negation. Its arm always runs
+  // the source then-branch; swapping branches here would negate the test twice.
   return {
     kind: "tagMatch",
     scrutinee: matched.scrutinee,
     typeName: matched.typeName,
-    cases: [{ variant: matched.variant, body: walkExpr(thenBody, ctx) }],
-    fallthrough: walkExpr(elseBody, ctx),
+    cases: [{ variant: matched.variant, body: walkExpr(e.then, ctx) }],
+    fallthrough: walkExpr(e.else, ctx),
     ty: e.ty,
   };
 }
