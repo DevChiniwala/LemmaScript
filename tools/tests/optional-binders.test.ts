@@ -104,3 +104,73 @@ test("path allocation is stable within a pass and isolated between passes", () =
   assert.equal(allocate(returned, first), inner);
   assert.equal(allocate(returned, second), outer, "a new pass must not inherit the first pass's occupied names");
 });
+
+function narrowSource(text: string) {
+  const project = new Project({ compilerOptions: {
+    strict: true, target: ScriptTarget.ESNext, lib: ["lib.esnext.d.ts"], types: [], skipLibCheck: true,
+  } });
+  const source = project.createSourceFile("scope-regression.ts", text);
+  assert.deepEqual(project.getPreEmitDiagnostics(), [], "the regression must be valid TypeScript");
+  return narrowModule(resolveModule(extractModule(source)));
+}
+
+test("return contracts do not rename body binders in existing generated proofs", () => {
+  const mod = narrowSource(String.raw`
+    export function value(result: number | undefined): number | undefined {
+      //@ ensures \result !== undefined ==> \result === \result
+      if (result !== undefined) return result;
+      return undefined;
+    }
+  `);
+  const fn = mod.functions[0];
+  const contract = fn.ensures[0];
+  const body = fn.body[0];
+  assert.equal(contract.kind, "someMatch");
+  assert.equal(body.kind, "someMatch");
+  if (contract.kind !== "someMatch" || body.kind !== "someMatch") throw new Error("missing narrowing");
+  assert.equal(contract.binder, "_result_val");
+  assert.equal(body.binder, "_result_val", "separate contract and body scopes preserve the historical spelling");
+});
+
+test("unrelated functions do not reserve each other's path hints", () => {
+  const first = `export function first(a_b: number | undefined): number {
+    if (a_b !== undefined) return a_b;
+    return 0;
+  }`;
+  const second = `export function second(a: Box): number {
+    if (a.b !== undefined) return a.b;
+    return 0;
+  }`;
+  for (const text of [first + second, second + first]) {
+    const mod = narrowSource("interface Box { b?: number }\n" + text);
+    assert.equal(mod.functions.length, 2);
+    for (const fn of mod.functions) {
+      const match = fn.body[0];
+      if (match.kind !== "someMatch") throw new Error("missing match");
+      assert.equal(match.binder, "_a_b_val", fn.name);
+    }
+  }
+});
+
+test("class methods have independent path binder registries", () => {
+  const mod = narrowSource(`
+    export class Values {
+      first(result: number | undefined): number {
+        //@ verify
+        if (result !== undefined) return result;
+        return 0;
+      }
+      second(): number | undefined {
+        //@ verify
+        //@ ensures \\result !== undefined ==> \\result === 0
+        return 0;
+      }
+    }
+  `);
+  assert.equal(mod.classes[0].methods.length, 2);
+  const [first, second] = mod.classes[0].methods;
+  for (const match of [first.body[0], second.ensures[0]]) {
+    if (match.kind !== "someMatch") throw new Error("missing match");
+    assert.equal(match.binder, "_result_val");
+  }
+});

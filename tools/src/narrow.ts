@@ -713,12 +713,17 @@ function ruleDiscriminantNegEarlyReturn(stmts: TStmt[], ctx: CondCtx): { stmt: T
 // ── Function / module entry ──────────────────────────────────
 
 function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
+  // Contracts and the body bind their payloads in separate generated scopes.
+  // Do not reserve a body's names because of a contract's \result (or another
+  // function's paths). Keep the shared counter's traversal order unchanged.
+  const specCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
+  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
   return {
     ...fn,
-    requires: fn.requires.map(e => walkExpr(e, ctx)),
-    ensures: fn.ensures.map(e => walkExpr(e, ctx)),
-    decreases: fn.decreases ? walkExpr(fn.decreases, ctx) : null,
-    body: walkStmts(fn.body, ctx),
+    requires: fn.requires.map(e => walkExpr(e, specCtx)),
+    ensures: fn.ensures.map(e => walkExpr(e, specCtx)),
+    decreases: fn.decreases ? walkExpr(fn.decreases, specCtx) : null,
+    body: walkStmts(fn.body, bodyCtx),
   };
 }
 

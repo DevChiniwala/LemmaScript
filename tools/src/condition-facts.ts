@@ -25,14 +25,14 @@ import { freshName, freshNameWhere, isUserName } from "./names.js";
 import type { TypeDecls } from "./typedecls.js";
 import { unionDeclOfTy, discriminantOf } from "./typedecls.js";
 
-/** Explicit context: declarations, optChain counter, and pass-local binders. */
+/** Explicit context: declarations, optChain counter, and scope-local binders. */
 export interface CondCtx {
   decls: TypeDecls;
   oc: { n: number };
   binders?: { names: Map<string, string>; used: Set<string> };
 }
 
-/** Allocate within this narrowing pass, retaining a path's name on repeated
+/** Allocate within this context, retaining a path's name on repeated
  *  detection. Semantic-only callers need no registry. */
 function freshBinder(ctx: CondCtx, hint: string, key?: string): string {
   const names = ctx.binders ??= { names: new Map(), used: new Set() };
@@ -53,7 +53,7 @@ export function freshOcBinder(ctx: CondCtx): string {
 /** What an optional check establishes: `scrutinee` is present (or absent,
  *  when `negated`), binding `binder : innerTy`. `binder` is a
  *  source-safe hint during detection; materializers freshen it against the
- *  pass's other binders. `truthiness` marks the `if (o)` / `!o` / `o ? :`
+ *  context's other binders. `truthiness` marks the `if (o)` / `!o` / `o ? :`
  *  forms, where presence alone isn't enough — a falsy inner value (`Some(0)`,
  *  `Some("")`) must still fail the check. */
 export interface PresentFact {
