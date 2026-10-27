@@ -472,6 +472,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "endsWith") {
           if (args.length === 2) {
             needPreamble("StringSearchPosition");
+            needPreamble("StringEndsWithAt");
             return `StringEndsWithAt(${obj}, ${args[0]}, ${args[1]})`;
           }
           return `(|${obj}| >= |${args[0]}| && ${obj}[|${obj}|-|${args[0]}|..] == ${args[0]})`;
@@ -492,6 +493,7 @@ function emitExpr(e: Expr): string {
         if (e.method === "startsWith") {
           if (args.length === 2) {
             needPreamble("StringSearchPosition");
+            needPreamble("StringStartsWithAt");
             return `StringStartsWithAt(${obj}, ${args[0]}, ${args[1]})`;
           }
           return `(|${obj}| >= |${args[0]}| && ${obj}[..|${args[0]}|] == ${args[0]})`;
@@ -1246,15 +1248,15 @@ const STRING_SEARCH_POSITION = `function StringSearchPosition(s: string, positio
   ensures StringSearchPosition(s, position) <= |s|
 {
   if position < 0 then 0 else if position > |s| then |s| else position
-}
+}`;
 
-function StringStartsWithAt(s: string, sub: string, position: int): bool
+const STRING_STARTS_WITH_AT = `function StringStartsWithAt(s: string, sub: string, position: int): bool
 {
   var start := StringSearchPosition(s, position);
   |sub| <= |s| - start && s[start..start + |sub|] == sub
-}
+}`;
 
-function StringEndsWithAt(s: string, sub: string, position: int): bool
+const STRING_ENDS_WITH_AT = `function StringEndsWithAt(s: string, sub: string, position: int): bool
 {
   var end := StringSearchPosition(s, position);
   |sub| <= end && s[end - |sub|..end] == sub
@@ -1537,6 +1539,8 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
   ["StringSearchPosition", STRING_SEARCH_POSITION],
+  ["StringStartsWithAt", STRING_STARTS_WITH_AT],
+  ["StringEndsWithAt", STRING_ENDS_WITH_AT],
   ["StringSplit", STRING_SPLIT],
   ["SeqSort", SEQ_SORT],
   ["SeqSortBy", SEQ_SORT_BY],
