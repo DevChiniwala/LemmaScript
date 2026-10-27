@@ -442,7 +442,10 @@ function emitExpr(e: Expr): string {
       if (ty === "string") {
         if (e.method === "indexOf") {
           needPreamble("StringIndexOf");
-          if (args.length === 2) return `StringIndexOfFrom(${obj}, ${args[0]}, ${args[1]})`;
+          if (args.length === 2) {
+            needPreamble("StringSearchPosition");
+            return `StringIndexOfFrom(${obj}, ${args[0]}, StringSearchPosition(${obj}, ${args[1]}))`;
+          }
           return `StringIndexOf(${obj}, ${args[0]})`;
         }
         if (e.method === "split")   { needPreamble("StringSplit"); return `StringSplit(${obj}, ${args[0]})`; }
@@ -466,14 +469,33 @@ function emitExpr(e: Expr): string {
           if (args.length === 1) return `${obj}[${args[0]}..]`;
           return `${obj}[${args[0]}..${args[1]}]`;
         }
-        if (e.method === "endsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[|${obj}|-|${args[0]}|..] == ${args[0]})`;
+        if (e.method === "endsWith") {
+          if (args.length === 2) {
+            needPreamble("StringSearchPosition");
+            return `StringEndsWithAt(${obj}, ${args[0]}, ${args[1]})`;
+          }
+          return `(|${obj}| >= |${args[0]}| && ${obj}[|${obj}|-|${args[0]}|..] == ${args[0]})`;
+        }
         if (e.method === "trim")    { needPreamble("StringTrim"); return `StringTrim(${obj})`; }
         if (e.method === "trimEnd") { needPreamble("StringTrim"); return `StringTrimRight(${obj})`; }
         if (e.method === "trimStart") { needPreamble("StringTrim"); return `StringTrimLeft(${obj})`; }
         if (e.method === "toLowerCase") { needPreamble("StringToLower"); return `StringToLower(${obj})`; }
         if (e.method === "toUpperCase") { needPreamble("StringToUpper"); return `StringToUpper(${obj})`; }
-        if (e.method === "includes") { needPreamble("StringIndexOf"); return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`; }
-        if (e.method === "startsWith") return `(|${obj}| >= |${args[0]}| && ${obj}[..|${args[0]}|] == ${args[0]})`;
+        if (e.method === "includes") {
+          needPreamble("StringIndexOf");
+          if (args.length === 2) {
+            needPreamble("StringSearchPosition");
+            return `(StringIndexOfFrom(${obj}, ${args[0]}, StringSearchPosition(${obj}, ${args[1]})) >= 0)`;
+          }
+          return `(StringIndexOf(${obj}, ${args[0]}) >= 0)`;
+        }
+        if (e.method === "startsWith") {
+          if (args.length === 2) {
+            needPreamble("StringSearchPosition");
+            return `StringStartsWithAt(${obj}, ${args[0]}, ${args[1]})`;
+          }
+          return `(|${obj}| >= |${args[0]}| && ${obj}[..|${args[0]}|] == ${args[0]})`;
+        }
         if (e.method === "charCodeAt") return `(${obj}[${args[0]}] as int)`;
         if (e.method === "repeat") { needPreamble("StringRepeat"); return `StringRepeat(${obj}, ${args[0]})`; }
       }
@@ -1220,6 +1242,24 @@ function SafeSlice<T>(s: seq<T>, lo: int, hi: int): seq<T>
   if hi' < lo' then [] else s[lo'..hi']
 }`;
 
+const STRING_SEARCH_POSITION = `function StringSearchPosition(s: string, position: int): nat
+  ensures StringSearchPosition(s, position) <= |s|
+{
+  if position < 0 then 0 else if position > |s| then |s| else position
+}
+
+function StringStartsWithAt(s: string, sub: string, position: int): bool
+{
+  var start := StringSearchPosition(s, position);
+  |sub| <= |s| - start && s[start..start + |sub|] == sub
+}
+
+function StringEndsWithAt(s: string, sub: string, position: int): bool
+{
+  var end := StringSearchPosition(s, position);
+  |sub| <= end && s[end - |sub|..end] == sub
+}`;
+
 const STRING_INDEX_OF = `function StringIndexOf(s: string, sub: string): int
   ensures StringIndexOf(s, sub) == -1
        || (0 <= StringIndexOf(s, sub) <= |s| - |sub| && s[StringIndexOf(s, sub)..StringIndexOf(s, sub) + |sub|] == sub)
@@ -1496,6 +1536,7 @@ const PREAMBLE_CODE: [string, string | (() => string)][] = [
   ["SeqJoin", SEQ_JOIN],
   ["SafeSlice", SAFE_SLICE],
   ["StringIndexOf", STRING_INDEX_OF],
+  ["StringSearchPosition", STRING_SEARCH_POSITION],
   ["StringSplit", STRING_SPLIT],
   ["SeqSort", SEQ_SORT],
   ["SeqSortBy", SEQ_SORT_BY],
