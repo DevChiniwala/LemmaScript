@@ -45,6 +45,7 @@ fixture_dir=$(mktemp -d)
 trap 'rm -rf "$fixture_dir"' EXIT
 cp tools/fixtures/deterministic-extern-equality.ts "$fixture_dir/deterministic.ts"
 cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
+cp tools/fixtures/negated-array-ternary.ts "$fixture_dir/negated-array-ternary.ts"
 cp examples/safeSlice.ts "$fixture_dir/legacy-safe-slice.ts"
 cp -R tools/fixtures/utf16-project "$fixture_dir/utf16-project"
 cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
@@ -56,6 +57,7 @@ if ! grep -Fq 'method {:axiom} rollDie' "$fixture_dir/impure.dfy.gen"; then
 fi
 
 npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/deterministic.ts"
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/negated-array-ternary.ts"
 expect_failure \
   "Dafny equated two calls to an impure extern" \
   npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/impure.ts"
