@@ -36,12 +36,11 @@
 
 import type { TModule, TFunction, TStmt, TExpr } from "./typedir.js";
 import { isTerminatorKind } from "./typedir.js";
-import { freshName } from "./names.js";
 import { builtinSpec } from "./builtins.js";
 import {
   type CondCtx, type PresentFact, type NoneDetector,
   presentFact, leadingPresent, leadingIsArray, flattenOr, noneDetector,
-  binderHintFor, binderHintForMapAccess, freshOcBinder,
+  bindPresentFact, freshPathBinder, binderHintForMapAccess, freshOcBinder,
   applyChain, restoreDiscriminantFlag, arrayBoundsCond, exprEqual,
   isArrayFact, typeofStringFact, variantFact, negVariantFact,
   presentMatchStmts, presentMatchExpr,
@@ -51,7 +50,7 @@ import {
 
 function walkExpr(e: TExpr, ctx: CondCtx): TExpr {
   const r = recurseExpr(e, ctx);
-  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r) ?? r;
+  return ruleNullish(r, ctx) ?? ruleNullishIndex(r) ?? ruleOptChainIndex(r) ?? ruleOptChain(r, ctx) ?? ruleImplOptional(r, ctx) ?? ruleImplArrayIsArray(r, ctx) ?? ruleConditionalArrayIsArray(r, ctx) ?? ruleConditionalAndArrayIsArray(r, ctx) ?? ruleConditionalAndOptional(r, ctx) ?? ruleConditionalOptionalSimple(r, ctx) ?? ruleConditionalInMap(r, ctx) ?? ruleConditionalOptionalTruthy(r, ctx) ?? r;
 }
 
 function recurseExpr(e: TExpr, ctx: CondCtx): TExpr {
@@ -94,7 +93,7 @@ function walkStmt(s: TStmt, ctx: CondCtx): TStmt {
   // array rule fires; independent narrows commute, so the order is harmless.)
   // && rules fire before the simple rule because they produce nested ifs whose
   // inner shape doesn't match the simple rule directly.
-  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleOptionalIndexBinding(r) ?? r;
+  return ruleIfAndOptional(r, ctx) ?? ruleIfAndArrayIsArray(r, ctx) ?? ruleIfOptionalSimple(r, ctx) ?? ruleExprStmtAndOptional(r, ctx) ?? ruleOptionalIndexBinding(r) ?? r;
 }
 
 function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
@@ -109,7 +108,7 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
       i += tagged.consumed - 1;
       continue;
     }
-    const consumed = ruleEarlyReturnOrChain(s, rest, ctx) ?? ruleEarlyReturnConsume(s, rest) ?? ruleEarlyReturnOptChainCompare(s, rest, ctx);
+    const consumed = ruleEarlyReturnOrChain(s, rest, ctx) ?? ruleEarlyReturnConsume(s, rest, ctx) ?? ruleEarlyReturnOptChainCompare(s, rest, ctx);
     if (consumed) {
       result.push(walkStmt(consumed, ctx));
       return result;
@@ -117,7 +116,7 @@ function walkStmts(stmts: TStmt[], ctx: CondCtx): TStmt[] {
     // walkStmt first — narrow's expression rules may rewrite the let init from
     // `conditional` to `someMatch`, in which case the let-cond desugar shouldn't fire.
     const walked = walkStmt(s, ctx);
-    const expanded = ruleLetCondAndOptional(walked);
+    const expanded = ruleLetCondAndOptional(walked, ctx);
     if (expanded) {
       for (const x of expanded) result.push(walkStmt(x, ctx));
       continue;
@@ -169,20 +168,20 @@ function isTerminating(stmts: TStmt[]): boolean {
 /** Driver: `if (e !== undefined) then else` — presence fact in if position.
  *  → `someMatch e { Some(_e_val) => then, None => else }`. Requires a
  *  non-empty Some branch. */
-function ruleIfOptionalSimple(s: TStmt): TStmt | null {
+function ruleIfOptionalSimple(s: TStmt, ctx: CondCtx): TStmt | null {
   if (s.kind !== "if") return null;
   const check = presentFact(s.cond);
   if (!check) return null;
   const someBody = check.negated ? s.else : s.then;
   const noneBody = check.negated ? s.then : s.else;
   if (someBody.length === 0) return null;
-  return presentMatchStmts(check, someBody, noneBody);
+  return presentMatchStmts(check, someBody, noneBody, ctx);
 }
 
 /** Driver: `if (e === undefined) terminate; rest` — presence fact in
  *  early-return position, consuming the rest of the block into the
  *  narrowed scope. Fires when the Some branch is empty. */
-function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
+function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | null {
   if (s.kind !== "if") return null;
   if (rest.length === 0) return null;
   const check = presentFact(s.cond);
@@ -191,7 +190,7 @@ function ruleEarlyReturnConsume(s: TStmt, rest: TStmt[]): TStmt | null {
   const noneBranch = check.negated ? s.then : s.else;
   if (someBranch.length !== 0) return null;
   if (!isTerminating(noneBranch)) return null;
-  return presentMatchStmts(check, rest, noneBranch);
+  return presentMatchStmts(check, rest, noneBranch, ctx);
 }
 
 /** Driver: `if (D1 || … || Dn) terminate; rest` — De-Morgan position. Each `Di`
@@ -214,7 +213,7 @@ function ruleEarlyReturnOrChain(s: TStmt, rest: TStmt[], ctx: CondCtx): TStmt | 
   for (const leaf of leaves) {
     const d = noneDetector(leaf, ctx);
     if (!d) { residualLeaves.push(leaf); continue; }
-    const key = binderHintFor(d.scrutinee)!;
+    const key = d.binder;  // memoized by full path, not by the ambiguous hint
     if (seen.has(key)) return null;  // two detectors on one optional: rare; leave to other rules
     seen.add(key);
     detectors.push(d);
@@ -250,9 +249,8 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
   if (!oc || oc.kind !== "optChain" || oc.obj.ty.kind !== "optional") return null;
   const lit = c.left === oc ? c.right : c.left;
   const innerTy = oc.obj.ty.inner;
-  const hint = binderHintFor(oc.obj);
-  if (hint === null) return null;
-  const binder = freshName(hint);
+  const binder = freshPathBinder(oc.obj, ctx);
+  if (binder === null) return null;
   const binderVar: TExpr = { kind: "var", name: binder, ty: innerTy };
   const unwrapped = applyChain(binderVar, oc.chain);
   restoreDiscriminantFlag(unwrapped, ctx.decls);
@@ -267,13 +265,13 @@ function ruleEarlyReturnOptChainCompare(s: TStmt, rest: TStmt[], ctx: CondCtx): 
 
 /** Driver (expression): `e !== undefined ? a : b` — presence fact in
  *  ternary position. */
-function ruleConditionalOptionalSimple(e: TExpr): TExpr | null {
+function ruleConditionalOptionalSimple(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
   const check = presentFact(e.cond);
   if (!check) return null;
   const someBody = check.negated ? e.else : e.then;
   const noneBody = check.negated ? e.then : e.else;
-  return presentMatchExpr(check, someBody, noneBody, e.ty);
+  return presentMatchExpr(check, someBody, noneBody, e.ty, ctx);
 }
 
 /** Driver (expression): `(path !== undefined [&& rest]) ==> B` — presence
@@ -299,6 +297,7 @@ function ruleImplOptional(e: TExpr, ctx: CondCtx): TExpr | null {
   const innerBody: TExpr = restCond
     ? { kind: "binop", op: "==>", left: restCond, right: e.right, ty: { kind: "bool" } }
     : e.right;
+  check = bindPresentFact(check, ctx);
   return {
     kind: "someMatch",
     scrutinee: check.scrutinee, binderTy: check.innerTy,
@@ -429,12 +428,11 @@ function ruleConditionalInMap(e: TExpr, ctx: CondCtx): TExpr | null {
 /** Driver (expression): `opt ? a : b` (truthiness — cond itself is optional).
  *  Only fires for simple var or simple `obj.field` cond. Historical shape:
  *  no falsy gate on the bound value (unlike the other truthiness positions). */
-function ruleConditionalOptionalTruthy(e: TExpr): TExpr | null {
+function ruleConditionalOptionalTruthy(e: TExpr, ctx: CondCtx): TExpr | null {
   if (e.kind !== "conditional") return null;
   if (e.cond.ty.kind !== "optional") return null;
-  const hint = binderHintFor(e.cond);
-  if (hint === null) return null;
-  const binder = freshName(hint);
+  const binder = freshPathBinder(e.cond, ctx);
+  if (binder === null) return null;
   return {
     kind: "someMatch",
     scrutinee: e.cond, binderTy: e.cond.ty.inner,
@@ -455,7 +453,7 @@ function ruleIfAndOptional(s: TStmt, ctx: CondCtx): TStmt | null {
   if (!extracted) return null;
   const { check, restCond } = extracted;
   const innerIf: TStmt = { kind: "if", cond: restCond, then: s.then, else: [] };
-  return presentMatchStmts(check, [walkStmt(innerIf, ctx)], []);
+  return presentMatchStmts(check, [walkStmt(innerIf, ctx)], [], ctx);
 }
 
 /** Driver: a bare expression statement `x !== undefined && rest` (the
@@ -472,7 +470,7 @@ function ruleExprStmtAndOptional(s: TStmt, ctx: CondCtx): TStmt | null {
   if (!extracted) return null;
   const { check, restCond } = extracted;
   const innerStmt: TStmt = { kind: "expr", expr: restCond };
-  return presentMatchStmts(check, [walkStmt(innerStmt, ctx)], []);
+  return presentMatchStmts(check, [walkStmt(innerStmt, ctx)], [], ctx);
 }
 
 /** Driver (statement): `let x = (e_opt && rest) ? a : b` — presence fact in
@@ -480,7 +478,7 @@ function ruleExprStmtAndOptional(s: TStmt, ctx: CondCtx): TStmt | null {
  *  → `var x: T := b; someMatch e_opt { Some(_v) => { if rest { x := a } } }`.
  *  Statement-level form is needed because Dafny doesn't allow method calls
  *  inside match expression arms. */
-function ruleLetCondAndOptional(s: TStmt): TStmt[] | null {
+function ruleLetCondAndOptional(s: TStmt, ctx: CondCtx): TStmt[] | null {
   if (s.kind !== "let" || s.mutable) return null;
   if (s.init.kind !== "conditional") return null;
   const extracted = leadingPresent(s.init.cond);
@@ -490,7 +488,7 @@ function ruleLetCondAndOptional(s: TStmt): TStmt[] | null {
     then: [{ kind: "assign", target: s.name, value: s.init.then }], else: [] };
   return [
     { kind: "let", name: s.name, ty: s.ty, mutable: true, init: s.init.else },
-    presentMatchStmts(check, [assignIf], []),
+    presentMatchStmts(check, [assignIf], [], ctx),
   ];
 }
 
@@ -550,7 +548,7 @@ function ruleConditionalAndOptional(e: TExpr, ctx: CondCtx): TExpr | null {
     kind: "conditional",
     cond: restCond, then: e.then, else: e.else, ty: e.ty,
   };
-  return presentMatchExpr(check, walkExpr(innerCond, ctx), e.else, e.ty);
+  return presentMatchExpr(check, walkExpr(innerCond, ctx), e.else, e.ty, ctx);
 }
 
 // ── Variant drivers (discriminants and synth array-unions) ──
@@ -714,12 +712,17 @@ function ruleDiscriminantNegEarlyReturn(stmts: TStmt[], ctx: CondCtx): { stmt: T
 // ── Function / module entry ──────────────────────────────────
 
 function narrowFunction(fn: TFunction, ctx: CondCtx): TFunction {
+  // Contracts and the body bind their payloads in separate generated scopes.
+  // Do not reserve a body's names because of a contract's \result (or another
+  // function's paths). Keep the shared counter's traversal order unchanged.
+  const specCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
+  const bodyCtx: CondCtx = { decls: ctx.decls, oc: ctx.oc };
   return {
     ...fn,
-    requires: fn.requires.map(e => walkExpr(e, ctx)),
-    ensures: fn.ensures.map(e => walkExpr(e, ctx)),
-    decreases: fn.decreases ? walkExpr(fn.decreases, ctx) : null,
-    body: walkStmts(fn.body, ctx),
+    requires: fn.requires.map(e => walkExpr(e, specCtx)),
+    ensures: fn.ensures.map(e => walkExpr(e, specCtx)),
+    decreases: fn.decreases ? walkExpr(fn.decreases, specCtx) : null,
+    body: walkStmts(fn.body, bodyCtx),
   };
 }
 

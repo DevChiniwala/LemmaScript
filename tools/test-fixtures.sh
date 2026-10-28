@@ -48,6 +48,7 @@ cp tools/fixtures/impure-extern-equality.ts "$fixture_dir/impure.ts"
 cp tools/fixtures/negated-array-ternary.ts "$fixture_dir/negated-array-ternary.ts"
 cp examples/safeSlice.ts "$fixture_dir/legacy-safe-slice.ts"
 cp -R tools/fixtures/utf16-project "$fixture_dir/utf16-project"
+cp tools/fixtures/optional-binder-collisions.ts "$fixture_dir/optional-binder-collisions.ts"
 cp tools/fixtures/unpaired-surrogate.ts "$fixture_dir/unpaired.ts"
 cp tools/fixtures/optional-guard-order.ts "$fixture_dir/optional-guard-order.ts"
 
@@ -69,6 +70,7 @@ if ! grep -Fq 'function SafeSlice' "$fixture_dir/legacy-safe-slice.dfy.gen"; the
   echo "ERROR: legacy //@ safe-slice no longer enables safe slice emission"
   exit 1
 fi
+npx tsx tools/src/lsc.ts check --backend=dafny --time-limit=10 "$fixture_dir/optional-binder-collisions.ts"
 
 # Project configuration: nearest-ancestor discovery, generic file overrides,
 # extern defaults, safe-slice, and mirrored Dafny artifact routing. Work from a
