@@ -420,6 +420,11 @@ function emitExpr(e: Expr): string {
         // predicate (e.g. a function reference).
         if (e.method === "some") {
           const lam = e.args[0];
+          // The existential binds only the element. Dropping another callback
+          // parameter could make its uses resolve to a same-named outer value.
+          if (lam.kind === "lambda" && lam.params.length > 1) {
+            throw new Error("Dafny array.some callbacks support at most one element parameter; index and array callback parameters are not supported.");
+          }
           let p: string, body: string;
           if (lam.kind === "lambda" && lam.body.length === 1 && lam.body[0].kind === "return") {
             const cb = comprehensionBinder(lam, lam.body[0].value, e.obj);
