@@ -120,25 +120,20 @@ export const bound = (f: PresentFact): TExpr =>
  *  the tree with that conjunct removed:
  *  `(x !== undefined && b) && c` → { check, restCond: b && c }.
  *
- *  Search order is shallowest-first, left-biased — both immediate operands
- *  before either nested chain — so the conjunct found is not necessarily the
- *  source-leftmost one. That is sound because every `parse` passed here
- *  (`leadingPresent`, `leadingIsArray`) matches only pure, total checks on an
- *  already-typed path, so hoisting one above the others is observationally
- *  neutral. The one thing it does change: the residual now sits inside the
- *  match arm, so a conjunct that would have run before a failing check no
- *  longer runs at all.
- *  Harmless while conditions stay pure — revisit if that ever stops holding. */
+ *  Search matching conjuncts in source order. A later check may read a field
+ *  whose root an earlier check unwraps, so the left subtree must be searched
+ *  before the right operand. Keep the remaining conjuncts in their original
+ *  relative order. */
 export function extractConjunct<C>(cond: TExpr, parse: (e: TExpr) => C | null): { check: C; restCond: TExpr } | null {
   if (cond.kind !== "binop" || cond.op !== "&&") return null;
   const left = parse(cond.left);
   if (left) return { check: left, restCond: cond.right };
-  const right = parse(cond.right);
-  if (right) return { check: right, restCond: cond.left };
   if (cond.left.kind === "binop" && cond.left.op === "&&") {
     const inner = extractConjunct(cond.left, parse);
     if (inner) return { check: inner.check, restCond: { ...cond, left: inner.restCond } as TExpr };
   }
+  const right = parse(cond.right);
+  if (right) return { check: right, restCond: cond.left };
   if (cond.right.kind === "binop" && cond.right.op === "&&") {
     const inner = extractConjunct(cond.right, parse);
     if (inner) return { check: inner.check, restCond: { ...cond, right: inner.restCond } as TExpr };
@@ -146,9 +141,8 @@ export function extractConjunct<C>(cond: TExpr, parse: (e: TExpr) => C | null): 
   return null;
 }
 
-/** The positive presence fact an `&&` chain contributes, plus the residual.
- *  "Leading" describes the rewrite, not the source: this fact becomes the
- *  outermost match, wherever in the chain it was written. */
+/** The first positive presence fact in source order, plus the residual.
+ *  It becomes the outermost match, keeping later path checks in its arm. */
 export function leadingPresent(cond: TExpr): { check: PresentFact; restCond: TExpr } | null {
   return extractConjunct(cond, e => {
     const f = presentFact(e);
