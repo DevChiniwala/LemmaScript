@@ -474,7 +474,7 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `c ? a : b` | `if c then a else b` | `if c then a else b` |
 | `opt ? f(opt) : undefined` | match on Some/None | `match opt { case Some(v) => Some(f(v)) case None => None }` |
 | `s.indexOf(sub)` | `JSString.indexOf s sub` | `StringIndexOf(s, sub)` |
-| `s.indexOf(sub, from)` | — | `StringIndexOfFrom(s, sub, from)` (negative `from` clamps to 0) |
+| `s.indexOf(sub, from)` | — (rejected) | `StringIndexOfFrom(s, sub, StringSearchPosition(s, from))`; position clamps to `[0, \|s\|]` |
 | `s.slice(start, end)` | `JSString.slice s start end` | `s[start..end]` |
 | `s.substring(start)` / `s.substring(start, end)` | — | `s[start..]` / `s[start..end]` |
 | `s.charCodeAt(i)` | — | `(s[i] as int)` |
@@ -486,6 +486,9 @@ With `local`, `SeqFilter` and `SeqAll` replace the corresponding
 | `s.includes(sub)` | — | `StringIndexOf(s, sub) >= 0` |
 | `s.startsWith(p)` | — | `\|s\| >= \|p\| && s[..\|p\|] == p` |
 | `s.endsWith(p)` | — | `\|s\| >= \|p\| && s[\|s\|-\|p\|..] == p` |
+| `s.includes(sub, from)` | — | Search from the clamped position, including an empty needle at the end |
+| `s.startsWith(p, from)` | — | `StringStartsWithAt(s, p, from)`; position clamps to `[0, \|s\|]` |
+| `s.endsWith(p, end)` | — | `StringEndsWithAt(s, p, end)`; exclusive end clamps to `[0, \|s\|]` |
 | `s.length` | `s.length` | `\|s\|` |
 | `Math.max(...s)` / `Math.min(...s)` | — | `MaxOfSeq(s)` / `MinOfSeq(s)` (requires `\|s\| > 0`) |
 | `perm(a, b)` (spec-only) | — | `Perm(a, b)` (preamble: `predicate Perm<T(==)>(a, b) { multiset(a) == multiset(b) }`) |

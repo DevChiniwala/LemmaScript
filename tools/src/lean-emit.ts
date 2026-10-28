@@ -267,7 +267,10 @@ function emitMethodCall(tyKind: string, method: string, monadic: boolean, obj: s
   // String methods
   if (tyKind === "string") {
     _needsJSString = true;
-    if (method === "indexOf") return `JSString.indexOf ${obj} ${args[0]}`;
+    if (method === "indexOf") {
+      if (args.length !== 1) throw new Error("Lean string.indexOf does not support a position argument");
+      return `JSString.indexOf ${obj} ${args[0]}`;
+    }
     if (method === "slice")   return `JSString.slice ${obj} ${args[0]} ${args[1]}`;
   }
   // Map methods
