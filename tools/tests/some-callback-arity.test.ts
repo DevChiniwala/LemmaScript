@@ -41,10 +41,39 @@ for (const [name, text] of [
       return [7].some((value, index, items) => items.length === 0);
     }`],
 ] as const) {
-  test(`Dafny refuses unsupported some callback parameters: ${name}`, () => {
-    assert.throws(() => generate(text), /some.*(index|callback|parameter)/i);
+  test(`Dafny supports some callback parameters: ${name}`, () => {
+    const output = generate(text);
+    assert.match(output, /exists \S+ \{:trigger [^}]+\} :: 0 <= \S+ < \|\S+\| &&/);
+    assert.match(output, /var index :=/);
   });
 }
+
+test("indexed some preserves outer names and binds a computed receiver once", () => {
+  const output = generate(`
+    export function collision(s_some: number[], i_some: number): boolean {
+      return s_some.slice(1).some((s_some, i_some, items) => items[i_some] === s_some && i_some === 0);
+    }`);
+  assert.match(output, /var s_some': seq<int> :=/);
+  assert.match(output, /exists i_some' \{:trigger/);
+  assert.match(output, /var s_some := s_some'\[i_some'\]/);
+  assert.match(output, /var i_some := i_some'/);
+  assert.match(output, /var items := s_some'/);
+});
+
+test("indexed some visits duplicate values at distinct indices and never visits an empty array", () => {
+  assert.equal([7, 7].some((value, index, items) => index === 1 && items[index] === value), true);
+  assert.equal([7].some((value, index, items) => index === 1 && items[index] === value), false);
+  assert.equal(([] as number[]).some((value, index, items) => index === 0), false);
+  const output = generate(`
+    export function duplicate(): boolean {
+      return [7, 7].some((value, index, items) => index === 1 && items[index] === value);
+    }
+    export function empty(): boolean {
+      return ([] as number[]).some((value, index) => index === 0);
+    }`);
+  assert.match(output, /var items :=/);
+  assert.doesNotMatch(output, /exists value :: value in/);
+});
 
 test("Dafny still accepts unary and parameterless some callbacks", () => {
   const output = generate(`
